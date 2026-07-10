@@ -18,12 +18,14 @@ class Value {
 public:
   using Array = std::vector<Value>;
   using Map = std::vector<std::pair<Value, Value>>; // order here is irrelevant; encode sorts
-  enum class Type { Null, Bool, Int, Bytes, Text, Array, Map };
+  // Order MUST match the private variant's alternative order (type() casts index).
+  enum class Type { Null, Bool, Int, Bytes, Text, Array, Map, Float };
 
   // Named factories avoid bool/int overload ambiguity and read clearly.
   static Value null();
   static Value boolean(bool b);
   static Value integer(std::int64_t i);
+  static Value floating(double d);
   static Value bytes(std::vector<std::uint8_t> b);
   static Value text(std::string s);
   static Value array(Array a);
@@ -32,6 +34,7 @@ public:
   Type type() const;
   bool as_bool() const;
   std::int64_t as_int() const;
+  double as_float() const;
   const std::vector<std::uint8_t>& as_bytes() const;
   const std::string& as_text() const;
   const Array& as_array() const;
@@ -41,7 +44,7 @@ public:
 
 private:
   using Variant = std::variant<std::monostate, bool, std::int64_t, std::vector<std::uint8_t>,
-                               std::string, Array, Map>;
+                               std::string, Array, Map, double>;
   Value() = default; // Null (monostate)
   explicit Value(Variant v) : v_(std::move(v)) {}
   Variant v_;

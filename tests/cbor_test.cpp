@@ -68,6 +68,17 @@ TEST_CASE("decode round-trips and tolerates non-canonical input") {
   CHECK(*decode(nc) == Value::integer(1));
 }
 
+TEST_CASE("canonical floats use the shortest lossless form") {
+  CHECK(enc(Value::floating(2.5)) == "f94100");  // exact in f16
+  CHECK(enc(Value::floating(0.0)) == "f90000");
+  CHECK(enc(Value::floating(1.0)) == "f93c00");
+  CHECK(enc(Value::floating(0.1)) == "fb3fb999999999999a"); // not f16/f32-exact -> f64
+  REQUIRE(decode(from_hex("f94100")).has_value());
+  CHECK(*decode(from_hex("f94100")) == Value::floating(2.5));
+  REQUIRE(decode(from_hex("fb3fb999999999999a")).has_value());
+  CHECK(*decode(from_hex("fb3fb999999999999a")) == Value::floating(0.1));
+}
+
 TEST_CASE("decode rejects truncated and indefinite-length input") {
   CHECK_FALSE(decode(from_hex("82")).has_value());   // array(2) with no items
   CHECK_FALSE(decode(from_hex("8205")).has_value());  // array(2) with one item

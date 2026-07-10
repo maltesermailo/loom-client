@@ -1,12 +1,15 @@
 #include "loom/proto/cbor.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
 namespace loom::proto::cbor {
 
 Value Value::null() { return Value{}; }
 Value Value::boolean(bool b) { return Value(Variant{b}); }
 Value Value::integer(std::int64_t i) { return Value(Variant{i}); }
+Value Value::floating(double d) { return Value(Variant{d}); }
 Value Value::bytes(std::vector<std::uint8_t> b) { return Value(Variant{std::move(b)}); }
 Value Value::text(std::string s) { return Value(Variant{std::move(s)}); }
 Value Value::array(Array a) { return Value(Variant{std::move(a)}); }
@@ -15,6 +18,7 @@ Value Value::map(Map m) { return Value(Variant{std::move(m)}); }
 Value::Type Value::type() const { return static_cast<Type>(v_.index()); }
 bool Value::as_bool() const { return std::get<bool>(v_); }
 std::int64_t Value::as_int() const { return std::get<std::int64_t>(v_); }
+double Value::as_float() const { return std::get<double>(v_); }
 const std::vector<std::uint8_t>& Value::as_bytes() const { return std::get<std::vector<std::uint8_t>>(v_); }
 const std::string& Value::as_text() const { return std::get<std::string>(v_); }
 const Value::Array& Value::as_array() const { return std::get<Array>(v_); }
@@ -45,6 +49,93 @@ static void put_head(std::vector<std::uint8_t>& out, std::uint8_t major, std::ui
   }
 }
 
+// IEEE-754 half<->single conversion (no dependency). f16->f32 is exact; f32->f16
+// rounds to nearest-even, but the encoder only *uses* an f16 result when it
+// round-trips exactly, so any rounding just means we fall back to a wider form.
+static float f16_to_f32(std::uint16_t h) {
+  std::uint32_t sign = static_cast<std::uint32_t>(h & 0x8000u) << 16;
+  std::uint32_t e = (h >> 10) & 0x1fu;
+  std::uint32_t m = h & 0x3ffu;
+  std::uint32_t out;
+  if (e == 0) {
+    if (m == 0) {
+      out = sign; // +/- zero
+    } else {
+      while ((m & 0x400u) == 0) { // normalize subnormal
+        m <<= 1;
+        e--;
+      }
+      e++;
+      m &= ~0x400u;
+      out = sign | ((e + (127 - 15)) << 23) | (m << 13);
+    }
+  } else if (e == 0x1fu) {
+    out = sign | 0x7f800000u | (m << 13); // Inf / NaN
+  } else {
+    out = sign | ((e - 15 + 127) << 23) | (m << 13);
+  }
+  float f;
+  std::memcpy(&f, &out, 4);
+  return f;
+}
+
+static std::uint16_t f32_to_f16(float value) {
+  std::uint32_t x;
+  std::memcpy(&x, &value, 4);
+  std::uint32_t sign = (x >> 16) & 0x8000u;
+  std::uint32_t biased = (x >> 23) & 0xffu;
+  std::uint32_t m = x & 0x7fffffu;
+  if (biased == 0xff) return static_cast<std::uint16_t>(sign | 0x7c00u | (m ? 0x200u : 0)); // Inf/NaN
+  std::int32_t e = static_cast<std::int32_t>(biased) - 127 + 15;
+  if (e >= 0x1f) return static_cast<std::uint16_t>(sign | 0x7c00u); // overflow -> Inf
+  if (e <= 0) {
+    if (e < -10) return static_cast<std::uint16_t>(sign); // underflow -> 0
+    m |= 0x800000u;                                       // restore implicit 1
+    std::uint32_t shift = static_cast<std::uint32_t>(14 - e);
+    std::uint32_t half = m >> shift;
+    std::uint32_t rem = m & ((1u << shift) - 1);
+    std::uint32_t mid = 1u << (shift - 1);
+    if (rem > mid || (rem == mid && (half & 1))) half++;
+    return static_cast<std::uint16_t>(sign | half);
+  }
+  std::uint32_t half = (static_cast<std::uint32_t>(e) << 10) | (m >> 13);
+  std::uint32_t rem = m & 0x1fffu;
+  if (rem > 0x1000u || (rem == 0x1000u && (half & 1))) half++; // may carry into exponent
+  return static_cast<std::uint16_t>(sign | half);
+}
+
+// Preferred (shortest) float serialization (RFC 8949 §4.2.2): f16 if exact,
+// else f32 if exact, else f64.
+static void encode_float(std::vector<std::uint8_t>& out, double d) {
+  auto push_be = [&](std::uint64_t bits, int nbytes) {
+    for (int shift = (nbytes - 1) * 8; shift >= 0; shift -= 8)
+      out.push_back(static_cast<std::uint8_t>(bits >> shift));
+  };
+  if (std::isnan(d)) {
+    out.push_back(0xf9);
+    push_be(0x7e00, 2); // canonical quiet NaN
+    return;
+  }
+  const float f = static_cast<float>(d);
+  if (static_cast<double>(f) == d) {
+    const std::uint16_t h = f32_to_f16(f);
+    if (f16_to_f32(h) == f) {
+      out.push_back(0xf9);
+      push_be(h, 2);
+      return;
+    }
+    std::uint32_t bits;
+    std::memcpy(&bits, &f, 4);
+    out.push_back(0xfa);
+    push_be(bits, 4);
+    return;
+  }
+  std::uint64_t bits;
+  std::memcpy(&bits, &d, 8);
+  out.push_back(0xfb);
+  push_be(bits, 8);
+}
+
 static void encode_into(std::vector<std::uint8_t>& out, const Value& v) {
   switch (v.type()) {
   case Value::Type::Null:
@@ -61,6 +152,9 @@ static void encode_into(std::vector<std::uint8_t>& out, const Value& v) {
       put_head(out, 1, static_cast<std::uint64_t>(-(i + 1)));
     break;
   }
+  case Value::Type::Float:
+    encode_float(out, v.as_float());
+    break;
   case Value::Type::Bytes: {
     const auto& b = v.as_bytes();
     put_head(out, 2, b.size());
@@ -173,7 +267,19 @@ static std::optional<Value> decode_item(std::span<const std::uint8_t> b, std::si
     if (ai == 20) return Value::boolean(false);
     if (ai == 21) return Value::boolean(true);
     if (ai == 22) return Value::null();
-    return std::nullopt; // floats (25-27) added in step 4; other simples unused
+    if (ai == 25) return Value::floating(f16_to_f32(static_cast<std::uint16_t>(arg)));
+    if (ai == 26) {
+      float f;
+      const std::uint32_t bits = static_cast<std::uint32_t>(arg);
+      std::memcpy(&f, &bits, 4);
+      return Value::floating(f);
+    }
+    if (ai == 27) {
+      double d;
+      std::memcpy(&d, &arg, 8);
+      return Value::floating(d);
+    }
+    return std::nullopt; // other simple values are unused by Loom
   default:
     return std::nullopt;
   }

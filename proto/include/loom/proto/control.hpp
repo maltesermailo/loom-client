@@ -19,12 +19,23 @@ namespace loom::proto::control {
 
 inline constexpr std::size_t kMaxFrameBody = 65536;
 
-// Message registry (§3.3).
+// Message registry (§3.3, PAIRING.md §5).
 inline constexpr std::uint64_t kHello = 0x01;
 inline constexpr std::uint64_t kWelcome = 0x02;
 inline constexpr std::uint64_t kConfig = 0x03;
 inline constexpr std::uint64_t kConfigAck = 0x04;
 inline constexpr std::uint64_t kStart = 0x05;
+inline constexpr std::uint64_t kInput = 0x10;
+inline constexpr std::uint64_t kIdrRequest = 0x20;
+inline constexpr std::uint64_t kStats = 0x21;
+inline constexpr std::uint64_t kClockPing = 0x30;
+inline constexpr std::uint64_t kClockPong = 0x31;
+inline constexpr std::uint64_t kError = 0x40;
+inline constexpr std::uint64_t kBye = 0x41;
+inline constexpr std::uint64_t kPairA = 0x50;
+inline constexpr std::uint64_t kPairB = 0x51;
+inline constexpr std::uint64_t kPairC = 0x52;
+inline constexpr std::uint64_t kPairResult = 0x53;
 
 // The body-map keys defined for a message type, or nullopt if unregistered
 // (an unregistered message is ignored on receipt). Keys outside the set are

@@ -3,21 +3,35 @@
 namespace loom::proto::control {
 
 std::optional<std::span<const std::int64_t>> known_keys(std::uint64_t msg_type) {
-  static constexpr std::int64_t kHelloKeys[] = {0, 1, 2, 3, 4, 5};
-  static constexpr std::int64_t kWelcomeKeys[] = {0, 1, 2};
-  static constexpr std::int64_t kConfigKeys[] = {0, 1, 2, 3, 4, 5};
-  static constexpr std::int64_t kConfigAckKeys[] = {0};
+  static constexpr std::int64_t k0[] = {0};
+  static constexpr std::int64_t k01[] = {0, 1};
+  static constexpr std::int64_t k012[] = {0, 1, 2};
+  static constexpr std::int64_t k0_5[] = {0, 1, 2, 3, 4, 5};
+  static constexpr std::int64_t k0_6[] = {0, 1, 2, 3, 4, 5, 6};
+  using S = std::span<const std::int64_t>;
   switch (msg_type) {
   case kHello:
-    return std::span<const std::int64_t>(kHelloKeys);
-  case kWelcome:
-    return std::span<const std::int64_t>(kWelcomeKeys);
   case kConfig:
-    return std::span<const std::int64_t>(kConfigKeys);
+    return S(k0_5);
+  case kWelcome:
+  case kClockPong:
+    return S(k012);
+  case kStats:
+    return S(k0_6);
+  case kError:
+  case kPairB:
+  case kPairResult:
+    return S(k01);
   case kConfigAck:
-    return std::span<const std::int64_t>(kConfigAckKeys);
+  case kInput:
+  case kIdrRequest:
+  case kClockPing:
+  case kBye:
+  case kPairA:
+  case kPairC:
+    return S(k0);
   case kStart:
-    return std::span<const std::int64_t>{}; // START has an empty body
+    return S{}; // START has an empty body
   default:
     return std::nullopt;
   }
