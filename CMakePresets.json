@@ -1,0 +1,39 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "host-tools",
+      "displayName": "host-tools (macOS): proto/core + tests",
+      "description": "Builds the protocol layer, core, and unit tests natively on the dev Mac.",
+      "binaryDir": "${sourceDir}/build/host-tools",
+      "cacheVariables": { "LOOM_BUILD_TESTS": "ON" }
+    },
+    {
+      "name": "sdl",
+      "displayName": "sdl (placeholder)",
+      "description": "Desktop SDL2 debug client — not implemented yet; inherits host-tools for now.",
+      "inherits": "host-tools",
+      "binaryDir": "${sourceDir}/build/sdl"
+    },
+    {
+      "name": "quest",
+      "displayName": "quest (placeholder)",
+      "description": "Quest NDK/OpenXR client — Android toolchain wired in a later session.",
+      "inherits": "host-tools",
+      "binaryDir": "${sourceDir}/build/quest"
+    }
+  ],
+  "buildPresets": [
+    { "name": "host-tools", "configurePreset": "host-tools" },
+    { "name": "sdl", "configurePreset": "sdl" },
+    { "name": "quest", "configurePreset": "quest" }
+  ],
+  "testPresets": [
+    {
+      "name": "host-tools",
+      "configurePreset": "host-tools",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

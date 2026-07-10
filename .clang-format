@@ -1,0 +1,6 @@
+# Loom client C++ style: LLVM base, 100-column limit.
+BasedOnStyle: LLVM
+ColumnLimit: 100
+Standard: c++20
+IndentWidth: 2
+PointerAlignment: Left
