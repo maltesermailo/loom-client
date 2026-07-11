@@ -7,6 +7,8 @@ add_executable(proto_tests
   control_test.cpp
   reassembly_test.cpp
   clocksync_test.cpp
-  keymap_test.cpp)
-target_link_libraries(proto_tests PRIVATE loom_proto doctest::doctest)
+  keymap_test.cpp
+  session_test.cpp)
+# loom_core PUBLIC-links loom_proto, so linking core alone covers both.
+target_link_libraries(proto_tests PRIVATE loom_core doctest::doctest)
 add_test(NAME proto_tests COMMAND proto_tests)
