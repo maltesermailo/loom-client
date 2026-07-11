@@ -10,6 +10,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(LOOM_BUILD_TESTS "Build loom-client unit tests + the vector adapter" ON)
+option(LOOM_BUILD_SDL "Build the SDL desktop debug client (fetches + builds msquic)" OFF)
 
 # Test/tooling dependencies are fetched before the subdirectories that use them.
 if(LOOM_BUILD_TESTS)
@@ -38,8 +39,11 @@ endif()
 add_subdirectory(proto)
 add_subdirectory(core)
 
-# The Quest (OpenXR/NDK) and SDL debug clients are added in later sessions;
-# their preset placeholders live in CMakePresets.json.
+# SDL desktop debug client (msquic transport). Off by default and excluded from
+# check.sh; enable via the `sdl` preset. The Quest client arrives in M3.
+if(LOOM_BUILD_SDL)
+  add_subdirectory(sdl)
+endif()
 
 if(LOOM_BUILD_TESTS)
   enable_testing()

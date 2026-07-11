@@ -11,10 +11,11 @@
     },
     {
       "name": "sdl",
-      "displayName": "sdl (placeholder)",
-      "description": "Desktop SDL2 debug client — not implemented yet; inherits host-tools for now.",
+      "displayName": "sdl (desktop debug client)",
+      "description": "Desktop debug client: builds msquic from source and loom-sdl. Needs network for the first configure.",
       "inherits": "host-tools",
-      "binaryDir": "${sourceDir}/build/sdl"
+      "binaryDir": "${sourceDir}/build/sdl",
+      "cacheVariables": { "LOOM_BUILD_SDL": "ON" }
     },
     {
       "name": "quest",
