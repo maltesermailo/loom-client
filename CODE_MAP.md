@@ -33,8 +33,8 @@ disagreement. `proto/` here is the C++ twin of the Rust `loom-proto` (`loom-host
                     └───────────────▲──────────────────────────────┘
                                     │ ITransport seam (bytes + events)
         ┌───────────────────────────┴───────────────┐   Quest (M3) reuses core/ +
-   QUIC │ sdl/   loom-sdl  (msquic transport + app)  │   proto/ behind its own
-  <────>│  transport · msquic_transport · main       │   ITransport — not here yet
+   QUIC │ sdl/  loom-sdl  (transport + decode + show) │   proto/ behind its own
+  <────>│  msquic · video_pipeline · decoder · render │   ITransport — not here yet
         └────────────────────────────────────────────┘
 ```
 
@@ -96,28 +96,38 @@ Transport-agnostic, sans-io. Depends only on `loom_proto` (PUBLIC).
 
 ## `sdl/` — desktop debug client (`loom-sdl`)
 
-The QUIC transport + app. **OFF by default**, excluded from `check.sh` (needs network + a
-multi-minute msquic build); enable with the `sdl` CMake preset. SDL2 window + decode + overlay
-arrive in M1.2/M1.3 — M1.1 is connect + handshake, headless.
+The QUIC transport + media display. **OFF by default**, excluded from `check.sh` (needs network,
+a multi-minute msquic build, SDL2 + libavcodec); enable with the `sdl` CMake preset. As of M1.2 it
+opens a window and shows the streamed video; the on-screen overlay arrives in M1.3.
 
 | File | What it is | Key symbols | § |
 |---|---|---|---|
-| [`transport.hpp`](sdl/src/transport.hpp) | The QUIC seam (keeps `core` transport-agnostic) | `ITransport`, `TransportEvent` | 2 |
-| [`msquic_transport.hpp`](sdl/src/msquic_transport.hpp) · [`.cpp`](sdl/src/msquic_transport.cpp) | `ITransport` over msquic (C API) | `MsQuicTransport`, `on_connection`, `on_stream` | 1, 2 |
-| [`main.cpp`](sdl/src/main.cpp) | App loop: events → `Session` → actions | `main` | M1.1 |
-| [`CMakeLists.txt`](sdl/CMakeLists.txt) | Builds msquic v2.5.9 (ExternalProject) + `loom-sdl` | `msquic_ext`, `loom-sdl` | — |
+| [`transport.hpp`](sdl/src/transport.hpp) | The QUIC seam (keeps `core` transport-agnostic) | `ITransport`, `TransportEvent` (Connected/ControlBytes/Datagram/Closed) | 2, 4 |
+| [`msquic_transport.hpp`](sdl/src/msquic_transport.hpp) · [`.cpp`](sdl/src/msquic_transport.cpp) | `ITransport` over msquic (C API) | `MsQuicTransport`, `on_connection`, `on_stream` | 1, 2, 4 |
+| [`video_pipeline.hpp`](sdl/src/video_pipeline.hpp) · [`.cpp`](sdl/src/video_pipeline.cpp) | datagrams → reassembly → decode thread | `VideoPipeline::{feed_datagram,take_frame}` | 6, 3.6, 4.1 |
+| [`decoder.hpp`](sdl/src/decoder.hpp) · [`.cpp`](sdl/src/decoder.cpp) | libavcodec HEVC decode (low-delay) | `HevcDecoder::decode`, `DecodedFrame` | 5 |
+| [`renderer.hpp`](sdl/src/renderer.hpp) · [`.cpp`](sdl/src/renderer.cpp) | SDL2 window + YUV texture (no swscale) | `Renderer::{present,poll_quit}` | 7 |
+| [`main.cpp`](sdl/src/main.cpp) | App loop: transport events → `Session` + pipeline → render | `main` | M1.2 |
+| [`CMakeLists.txt`](sdl/CMakeLists.txt) | msquic (ExternalProject) + SDL2/ffmpeg (pkg-config) | `msquic_ext`, `loom-sdl` | — |
 
 ### Inside `msquic_transport.cpp` — msquic wiring
 
 | Function | Role |
 |---|---|
-| `open_configuration` | ALPN loom/1, keep-alive 5 s / idle 15 s; dev creds skip cert validation (TODO M7) |
-| `start` | ConnectionOpen + ConnectionStart |
-| `send_control` | Queue a frame (heap `SendBuf`, freed on SEND_COMPLETE) |
-| `on_connection` | CONNECTED → open control stream + push `Connected`; shutdown → `Closed` (close code) |
-| `on_stream` | RECEIVE → push `ControlBytes` |
+| `open_configuration` | ALPN loom/1, keep-alive 5 s / idle 15 s, datagrams on; dev creds skip cert validation (TODO M7) |
+| `start` / `send_control` | ConnectionOpen+Start / queue a control frame (heap `SendBuf`, freed on SEND_COMPLETE) |
+| `on_connection` | CONNECTED → open control stream + `Connected`; DATAGRAM_RECEIVED → `Datagram`; shutdown → `Closed` |
+| `on_stream` | RECEIVE → `ControlBytes` |
 
-msquic callbacks run on worker threads and only push onto a mutex-guarded queue, so the app loop stays single-threaded.
+### Inside `video_pipeline.cpp` — the receive pipeline
+
+| Step | Role |
+|---|---|
+| `feed_datagram` (main thread) | Stash fragment payload; push header to `reassembly`; on Deliver assemble AU (strip §4.1 capture_ts) → decode queue; on IdrRequest → callback sends IDR_REQUEST |
+| `decode_loop` (decode thread) | Pop AU → `HevcDecoder::decode` → publish newest frame |
+| `take_frame` (main thread) | Hand the newest decoded frame to the renderer |
+
+msquic callbacks run on worker threads and only push onto a mutex-guarded queue, so the app loop stays single-threaded; decode runs on its own thread.
 
 ---
 
@@ -146,6 +156,7 @@ Linked against `loom_core` (which brings `loom_proto`). `smoke_test.cpp` carries
 | Understand the wire format | [`result.hpp`](proto/include/loom/proto/result.hpp) → [`control.hpp`](proto/include/loom/proto/control.hpp) → [`datagram.hpp`](proto/include/loom/proto/datagram.hpp) → [`cbor.hpp`](proto/include/loom/proto/cbor.hpp) |
 | Understand a client session | [`session.hpp`](core/include/loom/core/session.hpp) → [`session.cpp`](core/src/session.cpp) |
 | Understand transport / QUIC | [`transport.hpp`](sdl/src/transport.hpp) → [`msquic_transport.cpp`](sdl/src/msquic_transport.cpp) |
+| Trace the display path | datagram → [`video_pipeline.cpp`](sdl/src/video_pipeline.cpp) → [`decoder.cpp`](sdl/src/decoder.cpp) → [`renderer.cpp`](sdl/src/renderer.cpp) |
 | Trace loss recovery | [`reassembly.hpp`](proto/include/loom/proto/reassembly.hpp) invariants + rules 1–3 |
 | Reuse on Quest (M3) | Implement `ITransport` with msquic-on-Android; `core/` + `proto/` unchanged |
 | Run the suites | `./check.sh` (build + `ctest` + `vector-adapter`); SDL builds via the `sdl` preset |
