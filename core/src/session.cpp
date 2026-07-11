@@ -1,0 +1,200 @@
+#include "loom/core/session.hpp"
+
+#include <cstdint>
+
+#include "loom/proto/cbor.hpp"
+#include "loom/proto/control.hpp"
+#include "loom/proto/errors.hpp"
+
+namespace loom::core {
+namespace {
+
+using loom::proto::cbor::Value;
+namespace control = loom::proto::control;
+namespace errors = loom::proto::errors;
+
+std::optional<std::int64_t> find_int(const Value::Map& m, std::int64_t key) {
+  for (const auto& [k, v] : m) {
+    if (k.type() == Value::Type::Int && k.as_int() == key && v.type() == Value::Type::Int) {
+      return v.as_int();
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> find_text(const Value::Map& m, std::int64_t key) {
+  for (const auto& [k, v] : m) {
+    if (k.type() == Value::Type::Int && k.as_int() == key && v.type() == Value::Type::Text) {
+      return v.as_text();
+    }
+  }
+  return std::nullopt;
+}
+
+// Element `idx` of a 2-int array body value (e.g. CONFIG key 2 = [w, h]).
+std::optional<std::int64_t> find_pair_elem(const Value::Map& m, std::int64_t key, std::size_t idx) {
+  for (const auto& [k, v] : m) {
+    if (k.type() == Value::Type::Int && k.as_int() == key && v.type() == Value::Type::Array) {
+      const auto& a = v.as_array();
+      if (idx < a.size() && a[idx].type() == Value::Type::Int) return a[idx].as_int();
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+Session::Session(HelloParams params) : params_(std::move(params)) {}
+
+void Session::push(Action a) { out_.push_back(std::move(a)); }
+
+std::vector<Action> Session::poll() {
+  std::vector<Action> drained;
+  drained.swap(out_);
+  return drained;
+}
+
+void Session::on_event(Event ev) {
+  if (state_ == State::Closed || state_ == State::Failed) return;
+
+  switch (ev) {
+    case Event::Connected: {
+      // Send HELLO (MUST be the first message on the control stream, §3.4).
+      Value::Array codecs;
+      for (auto c : params_.codecs) codecs.push_back(Value::integer(static_cast<std::int64_t>(c)));
+      Value::Map hello;
+      hello.emplace_back(Value::integer(0), Value::integer(1));  // protocol_version
+      hello.emplace_back(Value::integer(1), Value::text(params_.client_name));
+      hello.emplace_back(Value::integer(2), Value::array(std::move(codecs)));
+      hello.emplace_back(Value::integer(3),
+                         Value::array({Value::integer(params_.max_width),
+                                       Value::integer(params_.max_height)}));
+      hello.emplace_back(Value::integer(4), Value::integer(params_.max_refresh));
+      hello.emplace_back(Value::integer(5),
+                         Value::integer(static_cast<std::int64_t>(params_.features)));
+      push({Action::Kind::SendControl, control::encode_frame(control::kHello, hello), 0});
+      state_ = State::Negotiating;
+      step_ = Step::Welcome;
+      break;
+    }
+    case Event::ConnectionLost:
+      state_ = State::Failed;
+      push({Action::Kind::Fatal, {}, errors::kInternal});
+      break;
+    case Event::UserBye:
+      push({Action::Kind::SendControl,
+            control::encode_frame(control::kBye, {{Value::integer(0), Value::integer(0)}}), 0});
+      state_ = State::Closed;
+      push({Action::Kind::Closed, {}, 0});
+      break;
+  }
+}
+
+void Session::on_control_bytes(std::span<const std::uint8_t> bytes) {
+  if (state_ == State::Closed || state_ == State::Failed) return;
+  rx_.insert(rx_.end(), bytes.begin(), bytes.end());
+
+  std::size_t off = 0;
+  while (rx_.size() - off >= 4) {
+    const std::uint32_t len = (static_cast<std::uint32_t>(rx_[off]) << 24) |
+                              (static_cast<std::uint32_t>(rx_[off + 1]) << 16) |
+                              (static_cast<std::uint32_t>(rx_[off + 2]) << 8) |
+                              static_cast<std::uint32_t>(rx_[off + 3]);
+    if (len > control::kMaxFrameBody) {
+      fatal(errors::kProtocolViolation);
+      rx_.clear();
+      return;
+    }
+    if (rx_.size() - off < 4 + static_cast<std::size_t>(len)) break;  // frame incomplete
+    handle_frame(std::span<const std::uint8_t>(rx_.data() + off, 4 + len));
+    off += 4 + len;
+    if (state_ == State::Closed || state_ == State::Failed) {
+      rx_.clear();
+      return;
+    }
+  }
+  rx_.erase(rx_.begin(), rx_.begin() + static_cast<std::ptrdiff_t>(off));
+}
+
+void Session::handle_frame(std::span<const std::uint8_t> frame) {
+  auto r = control::decode_frame(frame);
+  if (!r) {
+    fatal(errors::kProtocolViolation);
+    return;
+  }
+  const control::Decoded& d = r.value();
+  if (d.kind == control::Decoded::Kind::Ignored) return;  // unknown msg_type (§3.2)
+
+  const std::uint64_t t = d.msg_type;
+  const Value::Map& body = d.body;
+
+  // BYE / ERROR are valid in any phase (§3.9).
+  if (t == control::kBye) {
+    state_ = State::Closed;
+    push({Action::Kind::Closed, {}, 0});
+    return;
+  }
+  if (t == control::kError) {
+    const std::uint64_t code =
+        static_cast<std::uint64_t>(find_int(body, 0).value_or(errors::kInternal));
+    state_ = State::Failed;
+    push({Action::Kind::Fatal, {}, code});
+    return;
+  }
+
+  // Setup messages are only meaningful while negotiating. Mid-session CONFIG
+  // reconfiguration (§8) and CLOCK_PONG (§7) arrive in later milestones.
+  if (state_ != State::Negotiating) return;
+
+  switch (step_) {
+    case Step::Welcome:
+      if (t != control::kWelcome || find_int(body, 0) != 1) {
+        fatal(errors::kProtocolViolation);
+        return;
+      }
+      host_name_ = find_text(body, 1);
+      push({Action::Kind::Established, {}, 0});
+      step_ = Step::Config;
+      return;
+
+    case Step::Config: {
+      if (t != control::kConfig) {
+        fatal(errors::kProtocolViolation);
+        return;
+      }
+      SessionConfig c;
+      c.generation = static_cast<std::uint64_t>(find_int(body, 0).value_or(0));
+      c.codec = static_cast<std::uint64_t>(find_int(body, 1).value_or(0));
+      c.width = static_cast<std::uint64_t>(find_pair_elem(body, 2, 0).value_or(0));
+      c.height = static_cast<std::uint64_t>(find_pair_elem(body, 2, 1).value_or(0));
+      c.refresh = static_cast<std::uint64_t>(find_int(body, 3).value_or(0));
+      c.audio = static_cast<std::uint64_t>(find_int(body, 4).value_or(0));
+      c.bitrate_kbps = static_cast<std::uint64_t>(find_int(body, 5).value_or(0));
+      config_ = c;
+      // CONFIG_ACK {0: generation} — host MUST NOT send media before this.
+      push({Action::Kind::SendControl,
+            control::encode_frame(
+                control::kConfigAck,
+                {{Value::integer(0), Value::integer(static_cast<std::int64_t>(c.generation))}}),
+            0});
+      step_ = Step::Start;
+      return;
+    }
+
+    case Step::Start:
+      if (t != control::kStart) {
+        fatal(errors::kProtocolViolation);
+        return;
+      }
+      state_ = State::Streaming;
+      push({Action::Kind::MediaExpected, {}, 0});
+      return;
+  }
+}
+
+void Session::fatal(std::uint64_t code) {
+  state_ = State::Failed;
+  push({Action::Kind::Fatal, {}, code});
+}
+
+}  // namespace loom::core
