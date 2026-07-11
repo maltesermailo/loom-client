@@ -23,6 +23,7 @@ struct TransportEvent {
   enum class Kind {
     Connected,     // QUIC handshake done + control stream open
     ControlBytes,  // control-stream bytes arrived (in `bytes`)
+    Datagram,      // one media datagram arrived (in `bytes`) — §4
     Closed,        // connection shut down; `code` is the app close code (§10)
   };
   Kind kind;

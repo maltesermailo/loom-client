@@ -43,8 +43,18 @@ set_target_properties(msquic PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES ${MSQUIC_INSTALL}/include)
 add_dependencies(msquic msquic_ext)
 
-add_executable(loom-sdl src/main.cpp src/msquic_transport.cpp)
+# SDL2 + libavcodec/util for display and decode (Homebrew, via pkg-config).
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil)
+
+add_executable(loom-sdl
+  src/main.cpp
+  src/msquic_transport.cpp
+  src/decoder.cpp
+  src/renderer.cpp
+  src/video_pipeline.cpp)
 target_include_directories(loom-sdl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(loom-sdl PRIVATE cxx_std_20)
 target_compile_options(loom-sdl PRIVATE -Wall -Wextra)
-target_link_libraries(loom-sdl PRIVATE loom_core msquic)
+target_link_libraries(loom-sdl PRIVATE loom_core msquic PkgConfig::SDL2 PkgConfig::FFMPEG)

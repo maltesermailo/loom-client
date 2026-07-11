@@ -51,6 +51,9 @@ bool MsQuicTransport::open_configuration() {
   settings.IsSet.IdleTimeoutMs = 1;
   settings.KeepAliveIntervalMs = 5000;
   settings.IsSet.KeepAliveIntervalMs = 1;
+  // Advertise datagram support so the host may send media datagrams (§2/§4).
+  settings.DatagramReceiveEnabled = TRUE;
+  settings.IsSet.DatagramReceiveEnabled = TRUE;
 
   if (QUIC_FAILED(api_->ConfigurationOpen(registration_, &alpn, 1, &settings, sizeof(settings),
                                           this, &configuration_))) {
@@ -115,6 +118,12 @@ QUIC_STATUS MsQuicTransport::on_connection(HQUIC conn, QUIC_CONNECTION_EVENT* ev
       }
       push({TransportEvent::Kind::Connected, {}, 0});
       break;
+    case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
+      const QUIC_BUFFER& b = *ev->DATAGRAM_RECEIVED.Buffer;
+      push({TransportEvent::Kind::Datagram,
+            std::vector<std::uint8_t>(b.Buffer, b.Buffer + b.Length), 0});
+      break;
+    }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
       push({TransportEvent::Kind::Closed, {},
             ev->SHUTDOWN_INITIATED_BY_PEER.ErrorCode});
