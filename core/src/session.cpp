@@ -90,7 +90,7 @@ void Session::on_event(Event ev) {
   }
 }
 
-void Session::on_control_bytes(std::span<const std::uint8_t> bytes) {
+void Session::on_control_bytes(std::span<const std::uint8_t> bytes, std::int64_t now_us) {
   if (state_ == State::Closed || state_ == State::Failed) return;
   rx_.insert(rx_.end(), bytes.begin(), bytes.end());
 
@@ -106,7 +106,7 @@ void Session::on_control_bytes(std::span<const std::uint8_t> bytes) {
       return;
     }
     if (rx_.size() - off < 4 + static_cast<std::size_t>(len)) break;  // frame incomplete
-    handle_frame(std::span<const std::uint8_t>(rx_.data() + off, 4 + len));
+    handle_frame(std::span<const std::uint8_t>(rx_.data() + off, 4 + len), now_us);
     off += 4 + len;
     if (state_ == State::Closed || state_ == State::Failed) {
       rx_.clear();
@@ -116,7 +116,36 @@ void Session::on_control_bytes(std::span<const std::uint8_t> bytes) {
   rx_.erase(rx_.begin(), rx_.begin() + static_cast<std::ptrdiff_t>(off));
 }
 
-void Session::handle_frame(std::span<const std::uint8_t> frame) {
+void Session::on_tick(std::int64_t now_us) {
+  // Ping every 500 ms once the control stream is usable (§3.8), before START too.
+  if (state_ == State::Connecting || state_ == State::Closed || state_ == State::Failed) {
+    return;
+  }
+  if (pinged_ && now_us - last_ping_us_ < 500'000) {
+    return;
+  }
+  pinged_ = true;
+  last_ping_us_ = now_us;
+  Value::Map body;
+  body.emplace_back(Value::integer(0), Value::integer(now_us));
+  push({Action::Kind::SendControl, control::encode_frame(control::kClockPing, body), 0});
+}
+
+std::vector<std::uint8_t> Session::encode_stats(const StatsInput& in) const {
+  Value::Map body;
+  body.emplace_back(Value::integer(0), Value::integer(static_cast<std::int64_t>(in.frames_received)));
+  body.emplace_back(Value::integer(1), Value::integer(static_cast<std::int64_t>(in.frames_dropped)));
+  body.emplace_back(Value::integer(2), Value::integer(static_cast<std::int64_t>(in.datagrams)));
+  body.emplace_back(Value::integer(3), Value::floating(in.jitter_ms));
+  body.emplace_back(Value::integer(4), Value::integer(static_cast<std::int64_t>(in.decode_us)));
+  body.emplace_back(Value::integer(5), Value::integer(static_cast<std::int64_t>(in.rtt_us)));
+  if (in.e2e_us) {
+    body.emplace_back(Value::integer(6), Value::integer(static_cast<std::int64_t>(*in.e2e_us)));
+  }
+  return control::encode_frame(control::kStats, body);
+}
+
+void Session::handle_frame(std::span<const std::uint8_t> frame, std::int64_t now_us) {
   auto r = control::decode_frame(frame);
   if (!r) {
     fatal(errors::kProtocolViolation);
@@ -139,6 +168,16 @@ void Session::handle_frame(std::span<const std::uint8_t> frame) {
         static_cast<std::uint64_t>(find_int(body, 0).value_or(errors::kInternal));
     state_ = State::Failed;
     push({Action::Kind::Fatal, {}, code});
+    return;
+  }
+  // CLOCK_PONG is valid in any phase (§7): close the sample with t3 = now.
+  if (t == control::kClockPong) {
+    auto t0 = find_int(body, 0);
+    auto t1 = find_int(body, 1);
+    auto t2 = find_int(body, 2);
+    if (t0 && t1 && t2) {
+      clock_estimate_ = clock_filter_.push(*t0, *t1, *t2, now_us);
+    }
     return;
   }
 

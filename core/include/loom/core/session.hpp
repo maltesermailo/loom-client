@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "loom/proto/clocksync.hpp"
+
 namespace loom::core {
 
 // Coarse session phase (a subset of ARCHITECTURE §6.4, enough for M1.1).
@@ -71,29 +73,49 @@ struct Action {
   std::uint64_t code = 0;           // valid for Fatal
 };
 
+// Inputs the app supplies to build a STATS report (§3.7). rtt/e2e come from the
+// clock; the frame/decode/loss counts come from the app's own instrumentation.
+struct StatsInput {
+  std::uint64_t frames_received = 0;
+  std::uint64_t frames_dropped = 0;
+  std::uint64_t datagrams = 0;
+  double jitter_ms = 0.0;
+  std::uint64_t decode_us = 0;
+  std::uint64_t rtt_us = 0;
+  std::optional<std::uint64_t> e2e_us;  // omitted before the first clock sample
+};
+
 class Session {
 public:
   explicit Session(HelloParams params);
 
   // --- inputs (transport-agnostic) ---
-  // Feed raw control-stream bytes; may be partial or span several frames. The
-  // session buffers and extracts complete length-prefixed frames itself.
-  void on_control_bytes(std::span<const std::uint8_t> bytes);
+  // Feed raw control-stream bytes; may be partial or span several frames.
+  // `now_us` is the client-clock arrival time (used to close CLOCK_PONG, §7).
+  void on_control_bytes(std::span<const std::uint8_t> bytes, std::int64_t now_us = 0);
   void on_event(Event ev);
+  // Time tick (main loop drives it): queues a CLOCK_PING every 500 ms (§3.8),
+  // drained via poll() like every other action.
+  void on_tick(std::int64_t now_us);
 
   // --- output ---
   // Drain the actions produced since the last poll(), in occurrence order.
   std::vector<Action> poll();
 
+  // Build a STATS frame (§3.7) to send on the control stream.
+  std::vector<std::uint8_t> encode_stats(const StatsInput& in) const;
+
   // --- observers ---
   State state() const { return state_; }
   const std::optional<std::string>& host_name() const { return host_name_; }
   const std::optional<SessionConfig>& config() const { return config_; }
+  // Current clock estimate (rtt/offset µs), or nullopt before the first sample.
+  std::optional<proto::clocksync::Estimate> clock() const { return clock_estimate_; }
 
 private:
   enum class Step { Welcome, Config, Start };  // next expected setup message
 
-  void handle_frame(std::span<const std::uint8_t> frame);
+  void handle_frame(std::span<const std::uint8_t> frame, std::int64_t now_us);
   void fatal(std::uint64_t code);
   void push(Action a);
 
@@ -104,6 +126,12 @@ private:
   std::vector<Action> out_;
   std::optional<std::string> host_name_;
   std::optional<SessionConfig> config_;
+
+  // Clock sync (§7): the min-filter lives in proto; we only wire it.
+  proto::clocksync::ClockFilter clock_filter_;
+  std::optional<proto::clocksync::Estimate> clock_estimate_;
+  std::int64_t last_ping_us_ = 0;
+  bool pinged_ = false;
 };
 
 }  // namespace loom::core

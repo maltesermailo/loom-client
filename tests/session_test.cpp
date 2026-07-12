@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "loom/core/session.hpp"
+#include "loom/proto/clocksync.hpp"
 #include "loom/proto/control.hpp"
 #include "loom/proto/errors.hpp"
 
@@ -195,4 +196,59 @@ TEST_CASE("bytes after a terminal state are dropped") {
   s.poll();
   feed(s, welcome());
   CHECK(s.poll().empty());
+}
+
+TEST_CASE("on_tick emits a CLOCK_PING every 500 ms") {
+  Session s{HelloParams{}};
+  s.on_event(Event::Connected);
+  s.poll();
+
+  s.on_tick(0);
+  CHECK(sent(s.poll()).msg_type == control::kClockPing);
+  s.on_tick(100'000);  // < 500 ms → no ping
+  CHECK(s.poll().empty());
+  s.on_tick(500'000);  // ≥ 500 ms → ping
+  CHECK(sent(s.poll()).msg_type == control::kClockPing);
+}
+
+TEST_CASE("encode_stats builds a §3.7 STATS frame") {
+  Session s{HelloParams{}};
+  loom::core::StatsInput in;
+  in.frames_received = 10;
+  in.rtt_us = 4000;
+  in.e2e_us = 32000;
+  const auto d = control::decode_frame(s.encode_stats(in));
+  REQUIRE(d.has_value());
+  CHECK(d.value().msg_type == control::kStats);
+  CHECK(body_int(d.value(), 0) == 10);
+  CHECK(body_int(d.value(), 5) == 4000);
+  CHECK(body_int(d.value(), 6) == 32000);  // e2e present
+}
+
+TEST_CASE("clock sync: CLOCK_PONGs through the session match the min-filter") {
+  // The min-filter is vector-proven in clocksync_test; this proves the *live
+  // wire path* (encode/decode PONG → filter) preserves the samples end to end.
+  Session s{HelloParams{}};
+  s.on_event(Event::Connected);
+  s.poll();
+
+  struct Sample {
+    std::int64_t t0, t1, t2, t3;
+  };
+  const std::vector<Sample> samples = {
+      {1000, 1500, 1600, 2200}, {2000, 2400, 2450, 2900},
+      {3000, 3600, 3650, 4500}, {4000, 4200, 4260, 4700},
+  };
+  loom::proto::clocksync::ClockFilter reference;
+  loom::proto::clocksync::Estimate expected{};
+  for (const auto& smp : samples) {
+    const auto pong = frame(control::kClockPong, {{Value::integer(0), Value::integer(smp.t0)},
+                                                  {Value::integer(1), Value::integer(smp.t1)},
+                                                  {Value::integer(2), Value::integer(smp.t2)}});
+    s.on_control_bytes(std::span<const std::uint8_t>(pong.data(), pong.size()), smp.t3);
+    expected = reference.push(smp.t0, smp.t1, smp.t2, smp.t3);
+  }
+  REQUIRE(s.clock().has_value());
+  CHECK(s.clock()->rtt == expected.rtt);
+  CHECK(s.clock()->offset == expected.offset);
 }
