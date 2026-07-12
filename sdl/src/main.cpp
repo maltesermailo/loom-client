@@ -60,6 +60,22 @@ std::uint64_t rtt_of(const std::optional<loom::proto::clocksync::Estimate>& clk)
   return clk ? static_cast<std::uint64_t>(std::max<std::int64_t>(0, clk->rtt)) : 0;
 }
 
+// Print the current overlay values as one line to stdout (the demo captures it).
+void print_overlay(const loom::sdl::OverlayStats& s) {
+  if (s.have_clock) {
+    std::printf(
+        "overlay: e2e %llu ms  rtt %llu ms  decode %.1f ms  loss %.2f%%  bitrate %llu kbps\n",
+        static_cast<unsigned long long>(s.e2e_us / 1000),
+        static_cast<unsigned long long>(s.rtt_us / 1000), s.decode_us / 1000.0, s.loss_pct,
+        static_cast<unsigned long long>(s.bitrate_kbps));
+  } else {
+    std::printf("overlay: e2e --  rtt --  decode %.1f ms  loss %.2f%%  bitrate %llu kbps\n",
+                s.decode_us / 1000.0, s.loss_pct, static_cast<unsigned long long>(s.bitrate_kbps));
+  }
+
+  std::fflush(stdout);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -175,7 +191,10 @@ int main(int argc, char** argv) {
               : 0;
       bitrate_base = cur;
       bitrate_base_us = t;
+
       const auto clk = session.clock();
+      print_overlay(metrics.overlay(cur, rtt_of(clk), clk.has_value(), bitrate_kbps));
+
       transport.send_control(
           session.encode_stats(metrics.take_window(cur, rtt_of(clk), clk.has_value())));
       last_stats_us = t;
