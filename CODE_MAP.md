@@ -72,7 +72,7 @@ Transport-agnostic, sans-io. Depends only on `loom_proto` (PUBLIC).
 
 | File | What it is | Key symbols | § |
 |---|---|---|---|
-| [`session.hpp`](core/include/loom/core/session.hpp) · [`.cpp`](core/src/session.cpp) | **The mirror state machine** | `Session`, `HelloParams`, `SessionConfig`, `Event`, `Action`, `State` | 1.1, 3.4 |
+| [`session.hpp`](core/include/loom/core/session.hpp) · [`.cpp`](core/src/session.cpp) | **The mirror SM + clock sync + STATS** | `Session::{on_tick,clock,encode_stats}`, `Action`, `State`, `StatsInput` | 1.1, 3.4, 7 |
 
 ### Inside `session.hpp` — the API surface
 
@@ -104,10 +104,13 @@ opens a window and shows the streamed video; the on-screen overlay arrives in M1
 |---|---|---|---|
 | [`transport.hpp`](sdl/src/transport.hpp) | The QUIC seam (keeps `core` transport-agnostic) | `ITransport`, `TransportEvent` (Connected/ControlBytes/Datagram/Closed) | 2, 4 |
 | [`msquic_transport.hpp`](sdl/src/msquic_transport.hpp) · [`.cpp`](sdl/src/msquic_transport.cpp) | `ITransport` over msquic (C API) | `MsQuicTransport`, `on_connection`, `on_stream` | 1, 2, 4 |
-| [`video_pipeline.hpp`](sdl/src/video_pipeline.hpp) · [`.cpp`](sdl/src/video_pipeline.cpp) | datagrams → reassembly → decode thread | `VideoPipeline::{feed_datagram,take_frame}` | 6, 3.6, 4.1 |
-| [`decoder.hpp`](sdl/src/decoder.hpp) · [`.cpp`](sdl/src/decoder.cpp) | libavcodec HEVC decode (low-delay) | `HevcDecoder::decode`, `DecodedFrame` | 5 |
-| [`renderer.hpp`](sdl/src/renderer.hpp) · [`.cpp`](sdl/src/renderer.cpp) | SDL2 window + YUV texture (no swscale) | `Renderer::{present,poll_quit}` | 7 |
-| [`main.cpp`](sdl/src/main.cpp) | App loop: transport events → `Session` + pipeline → render | `main` | M1.2 |
+| [`video_pipeline.hpp`](sdl/src/video_pipeline.hpp) · [`.cpp`](sdl/src/video_pipeline.cpp) | datagrams → reassembly → decode thread; counters | `VideoPipeline::{feed_datagram,take_frame,counters}` | 6, 3.6, 4.1 |
+| [`decoder.hpp`](sdl/src/decoder.hpp) · [`.cpp`](sdl/src/decoder.cpp) | libavcodec HEVC decode; times each frame | `HevcDecoder::decode`, `DecodedFrame{capture_ts,decode_us}` | 5 |
+| [`renderer.hpp`](sdl/src/renderer.hpp) · [`.cpp`](sdl/src/renderer.cpp) | SDL2 window + YUV texture + SDL_ttf overlay | `Renderer::{present,draw_overlay,poll_quit}` | 7 |
+| [`metrics.hpp`](sdl/src/metrics.hpp) | Single-thread stats aggregator (overlay + §3.7 window) | `Metrics::{on_frame,take_window,overlay}` | 3.7 |
+| [`clock.hpp`](sdl/src/clock.hpp) | One client monotonic clock (ping t0 / pong t3 / e2e) | `now_us` | 7 |
+| [`main.cpp`](sdl/src/main.cpp) | App loop: events → `Session` + pipeline → render; timers, e2e, STATS | `main` | M1.3 |
+| [`tests/latency_test.cpp`](sdl/tests/latency_test.cpp) | e2e latency accuracy ±2 ms through real decode | `sdl_tests` | M1.3 |
 | [`CMakeLists.txt`](sdl/CMakeLists.txt) | msquic (ExternalProject) + SDL2/ffmpeg (pkg-config) | `msquic_ext`, `loom-sdl` | — |
 
 ### Inside `msquic_transport.cpp` — msquic wiring
@@ -157,6 +160,7 @@ Linked against `loom_core` (which brings `loom_proto`). `smoke_test.cpp` carries
 | Understand a client session | [`session.hpp`](core/include/loom/core/session.hpp) → [`session.cpp`](core/src/session.cpp) |
 | Understand transport / QUIC | [`transport.hpp`](sdl/src/transport.hpp) → [`msquic_transport.cpp`](sdl/src/msquic_transport.cpp) |
 | Trace the display path | datagram → [`video_pipeline.cpp`](sdl/src/video_pipeline.cpp) → [`decoder.cpp`](sdl/src/decoder.cpp) → [`renderer.cpp`](sdl/src/renderer.cpp) |
+| Understand clock sync / stats | [`session.hpp`](core/include/loom/core/session.hpp) (`on_tick`/`clock`) → [`metrics.hpp`](sdl/src/metrics.hpp) → overlay in [`main.cpp`](sdl/src/main.cpp) |
 | Trace loss recovery | [`reassembly.hpp`](proto/include/loom/proto/reassembly.hpp) invariants + rules 1–3 |
 | Reuse on Quest (M3) | Implement `ITransport` with msquic-on-Android; `core/` + `proto/` unchanged |
 | Run the suites | `./check.sh` (build + `ctest` + `vector-adapter`); SDL builds via the `sdl` preset |
