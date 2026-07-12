@@ -25,7 +25,7 @@ struct OverlayStats {
 };
 
 class Metrics {
-public:
+ public:
   // Fold in one displayed frame. `arrival_us`/`e2e_us` are client-clock µs.
   void on_frame(std::uint64_t capture_ts, std::int64_t arrival_us, std::uint64_t decode_us,
                 std::uint64_t e2e_us) {
@@ -36,8 +36,8 @@ public:
     last_e2e_us_ = e2e_us;
     // RFC 3550-style jitter; capture/arrival deltas cancel the clock offset.
     if (prev_capture_ >= 0) {
-      std::int64_t d = (arrival_us - prev_arrival_) -
-                       (static_cast<std::int64_t>(capture_ts) - prev_capture_);
+      std::int64_t d =
+          (arrival_us - prev_arrival_) - (static_cast<std::int64_t>(capture_ts) - prev_capture_);
       if (d < 0) d = -d;
       jitter_ms_ += (static_cast<double>(d) / 1000.0 - jitter_ms_) / 16.0;
     }
@@ -79,7 +79,7 @@ public:
     return o;
   }
 
-private:
+ private:
   std::uint64_t decode_sum_ = 0, e2e_sum_ = 0, n_ = 0;
   std::uint64_t last_decode_us_ = 0, last_e2e_us_ = 0;
   double jitter_ms_ = 0.0;

@@ -1,10 +1,11 @@
+#include "loom/core/session.hpp"
+
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <span>
 #include <vector>
 
-#include "loom/core/session.hpp"
 #include "loom/proto/clocksync.hpp"
 #include "loom/proto/control.hpp"
 #include "loom/proto/errors.hpp"
@@ -25,9 +26,10 @@ std::vector<std::uint8_t> frame(std::uint64_t type, Value::Map body) {
   return control::encode_frame(type, body);
 }
 std::vector<std::uint8_t> welcome() {
-  return frame(control::kWelcome, {{Value::integer(0), Value::integer(1)},
-                                   {Value::integer(1), Value::text("test-host")},
-                                   {Value::integer(2), Value::bytes(std::vector<std::uint8_t>(16))}});
+  return frame(control::kWelcome,
+               {{Value::integer(0), Value::integer(1)},
+                {Value::integer(1), Value::text("test-host")},
+                {Value::integer(2), Value::bytes(std::vector<std::uint8_t>(16))}});
 }
 std::vector<std::uint8_t> config(std::int64_t gen = 1) {
   return frame(control::kConfig,
@@ -236,8 +238,10 @@ TEST_CASE("clock sync: CLOCK_PONGs through the session match the min-filter") {
     std::int64_t t0, t1, t2, t3;
   };
   const std::vector<Sample> samples = {
-      {1000, 1500, 1600, 2200}, {2000, 2400, 2450, 2900},
-      {3000, 3600, 3650, 4500}, {4000, 4200, 4260, 4700},
+      {1000, 1500, 1600, 2200},
+      {2000, 2400, 2450, 2900},
+      {3000, 3600, 3650, 4500},
+      {4000, 4200, 4260, 4700},
   };
   loom::proto::clocksync::ClockFilter reference;
   loom::proto::clocksync::Estimate expected{};

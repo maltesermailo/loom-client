@@ -32,7 +32,7 @@ struct TransportEvent {
 };
 
 class ITransport {
-public:
+ public:
   virtual ~ITransport() = default;
 
   // Begin connecting to host:port (ALPN loom/1). Returns false on immediate

@@ -26,7 +26,7 @@
 namespace loom::sdl {
 
 class VideoPipeline {
-public:
+ public:
   // Called (on the feeding thread) when a lost fragment forces an IDR request;
   // the argument is last_good_frame_seq (§3.6).
   using IdrRequestFn = std::function<void(std::uint32_t)>;
@@ -53,7 +53,7 @@ public:
   // Snapshot of the cumulative counters (main thread).
   Counters counters() const { return counters_; }
 
-private:
+ private:
   void decode_loop();
   std::int64_t now_ms() const;
   void deliver_frame(std::uint32_t frame_seq);

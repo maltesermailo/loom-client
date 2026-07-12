@@ -1,6 +1,6 @@
-# Loom client C++ style: LLVM base, 100-column limit.
-BasedOnStyle: LLVM
+# Loom client C++ style: Google base, 100-column limit.
+# Google sets IndentWidth 2 and PointerAlignment Left already; we only widen the
+# column limit from Google's default 80 to 100.
+BasedOnStyle: Google
 ColumnLimit: 100
 Standard: c++20
-IndentWidth: 2
-PointerAlignment: Left

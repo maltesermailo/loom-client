@@ -16,7 +16,7 @@ void Reassembler::push(std::int64_t t_ms, const Fragment& frag) {
   if (incomplete_.find(seq) == incomplete_.end()) {
     // Rule 2: hold at most two in-flight incomplete frames.
     if (incomplete_.size() >= 2) {
-      const std::uint32_t oldest = incomplete_.begin()->first; // ordered map: min key
+      const std::uint32_t oldest = incomplete_.begin()->first;  // ordered map: min key
       if (seq > oldest) {
         incomplete_.erase(oldest);
         counters_.dropped_incomplete++;
@@ -30,7 +30,7 @@ void Reassembler::push(std::int64_t t_ms, const Fragment& frag) {
   }
 
   Incomplete& entry = incomplete_.at(seq);
-  entry.have.insert(frag.frag_index); // duplicates are idempotent
+  entry.have.insert(frag.frag_index);  // duplicates are idempotent
   if (entry.have.size() != entry.need) return;
 
   // Frame complete.
@@ -72,7 +72,7 @@ void Reassembler::deliver(std::int64_t t_ms, std::uint32_t seq, bool keyframe) {
 
 void Reassembler::maybe_idr(std::int64_t t_ms) {
   if (idr_outstanding_) return;
-  if (idr_last_t_ && t_ms - *idr_last_t_ < 250) return; // rate limit: >= 250 ms apart
+  if (idr_last_t_ && t_ms - *idr_last_t_ < 250) return;  // rate limit: >= 250 ms apart
   const std::int64_t last_good = last_decoded_.value_or(0);
   events_.push_back(
       Event{Event::Kind::IdrRequest, t_ms, 0, false, static_cast<std::uint32_t>(last_good)});
@@ -81,4 +81,4 @@ void Reassembler::maybe_idr(std::int64_t t_ms) {
   idr_last_good_at_request_ = last_decoded_;
 }
 
-} // namespace loom::proto::reassembly
+}  // namespace loom::proto::reassembly

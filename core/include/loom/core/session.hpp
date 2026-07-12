@@ -62,11 +62,11 @@ enum class Event {
 // An instruction produced by the state machine, drained via poll().
 struct Action {
   enum class Kind {
-    SendControl,   // write `bytes` (a complete length-prefixed frame) to control
-    Established,   // WELCOME received (host identified)
-    MediaExpected, // START received; bring up the decoder/media path (M1.2)
-    Fatal,         // fatal: `code` is a PROTOCOL.md §10 error code
-    Closed,        // clean close
+    SendControl,    // write `bytes` (a complete length-prefixed frame) to control
+    Established,    // WELCOME received (host identified)
+    MediaExpected,  // START received; bring up the decoder/media path (M1.2)
+    Fatal,          // fatal: `code` is a PROTOCOL.md §10 error code
+    Closed,         // clean close
   };
   Kind kind;
   std::vector<std::uint8_t> bytes;  // valid for SendControl
@@ -86,7 +86,7 @@ struct StatsInput {
 };
 
 class Session {
-public:
+ public:
   explicit Session(HelloParams params);
 
   // --- inputs (transport-agnostic) ---
@@ -112,7 +112,7 @@ public:
   // Current clock estimate (rtt/offset µs), or nullopt before the first sample.
   std::optional<proto::clocksync::Estimate> clock() const { return clock_estimate_; }
 
-private:
+ private:
   enum class Step { Welcome, Config, Start };  // next expected setup message
 
   void handle_frame(std::span<const std::uint8_t> frame, std::int64_t now_us);

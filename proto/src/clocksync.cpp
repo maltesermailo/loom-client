@@ -25,4 +25,4 @@ Estimate ClockFilter::push(std::int64_t t0, std::int64_t t1, std::int64_t t2, st
   return best;
 }
 
-} // namespace loom::proto::clocksync
+}  // namespace loom::proto::clocksync

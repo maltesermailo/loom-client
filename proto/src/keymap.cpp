@@ -47,4 +47,4 @@ std::optional<std::int64_t> Keymap::get(std::int64_t code) const {
   return it->second;
 }
 
-} // namespace loom::proto::keymap
+}  // namespace loom::proto::keymap

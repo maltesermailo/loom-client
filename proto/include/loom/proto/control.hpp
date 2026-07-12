@@ -58,4 +58,4 @@ std::vector<std::uint8_t> encode_frame(std::uint64_t msg_type, const cbor::Value
 // Decode one length-prefixed control frame.
 Result<Decoded, ControlError> decode_frame(std::span<const std::uint8_t> bytes);
 
-} // namespace loom::proto::control
+}  // namespace loom::proto::control

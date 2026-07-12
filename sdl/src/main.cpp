@@ -94,8 +94,9 @@ int main(int argc, char** argv) {
   auto start_media = [&]() {
     if (pipeline) return;
     renderer = std::make_unique<loom::sdl::Renderer>("loom-sdl", 1280, 720);
-    pipeline = std::make_unique<loom::sdl::VideoPipeline>(
-        [&transport](std::uint32_t last_good) { transport.send_control(idr_request_frame(last_good)); });
+    pipeline = std::make_unique<loom::sdl::VideoPipeline>([&transport](std::uint32_t last_good) {
+      transport.send_control(idr_request_frame(last_good));
+    });
     for (auto& dg : prebuffered) pipeline->feed_datagram(dg);
     prebuffered.clear();
     last_stats_us = loom::sdl::now_us();
@@ -127,8 +128,8 @@ int main(int argc, char** argv) {
           break;
         case loom::sdl::TransportEvent::Kind::Closed:
           if (ev->code != errors::kNone) {
-            std::fprintf(stderr, "loom-sdl: closed by host: %s (0x%02llx)\n", errors::name(ev->code),
-                         static_cast<unsigned long long>(ev->code));
+            std::fprintf(stderr, "loom-sdl: closed by host: %s (0x%02llx)\n",
+                         errors::name(ev->code), static_cast<unsigned long long>(ev->code));
             exit_code = 1;
           }
           running = false;
@@ -167,10 +168,11 @@ int main(int argc, char** argv) {
     if (pipeline && t - last_stats_us >= 1'000'000) {
       const auto cur = pipeline->counters();
       const double secs = static_cast<double>(t - bitrate_base_us) / 1e6;
-      bitrate_kbps = secs > 0.0
-                         ? static_cast<std::uint64_t>(
-                               static_cast<double>(cur.bytes - bitrate_base.bytes) * 8.0 / 1000.0 / secs)
-                         : 0;
+      bitrate_kbps =
+          secs > 0.0
+              ? static_cast<std::uint64_t>(static_cast<double>(cur.bytes - bitrate_base.bytes) *
+                                           8.0 / 1000.0 / secs)
+              : 0;
       bitrate_base = cur;
       bitrate_base_us = t;
       const auto clk = session.clock();
@@ -192,7 +194,8 @@ int main(int argc, char** argv) {
         }
       }
       const auto clk = session.clock();
-      const auto ov = metrics.overlay(pipeline->counters(), rtt_of(clk), clk.has_value(), bitrate_kbps);
+      const auto ov =
+          metrics.overlay(pipeline->counters(), rtt_of(clk), clk.has_value(), bitrate_kbps);
       if (current) {
         renderer->present(*current, overlay_lines(ov));
       }

@@ -31,8 +31,8 @@ std::vector<std::vector<std::uint8_t>> fragment(std::uint32_t seq, bool keyframe
     const std::size_t len = std::min(maxp, body.size() - off);
     const auto h = loom::proto::make_header(keyframe, 0, seq, static_cast<std::uint16_t>(i),
                                             static_cast<std::uint16_t>(count));
-    out.push_back(loom::proto::encode_datagram(
-        h, std::span<const std::uint8_t>(body.data() + off, len)));
+    out.push_back(
+        loom::proto::encode_datagram(h, std::span<const std::uint8_t>(body.data() + off, len)));
   }
   return out;
 }
@@ -52,7 +52,8 @@ TEST_CASE("e2e latency from capture_ts is accurate within 2 ms through real deco
   // Frame body = capture_ts (u64 BE) ‖ Annex-B AU (§4.1).
   std::vector<std::uint8_t> body(8);
   for (int i = 0; i < 8; ++i) {
-    body[i] = static_cast<std::uint8_t>((static_cast<std::uint64_t>(capture) >> (56 - 8 * i)) & 0xFF);
+    body[i] =
+        static_cast<std::uint8_t>((static_cast<std::uint64_t>(capture) >> (56 - 8 * i)) & 0xFF);
   }
   body.insert(body.end(), au.begin(), au.end());
 
@@ -75,7 +76,8 @@ TEST_CASE("e2e latency from capture_ts is accurate within 2 ms through real deco
 
   const std::int64_t display = loom::sdl::now_us();
   const std::int64_t offset = 0;  // same clock in-test
-  const std::int64_t e2e_reported = display - (static_cast<std::int64_t>(frame->capture_ts) - offset);
+  const std::int64_t e2e_reported =
+      display - (static_cast<std::int64_t>(frame->capture_ts) - offset);
   const std::int64_t e2e_true = display - capture;
 
   CHECK(std::llabs(e2e_reported - e2e_true) < 2000);  // ±2 ms

@@ -35,4 +35,4 @@ inline std::vector<std::uint8_t> from_hex(std::string_view h) {
   return out;
 }
 
-} // namespace loom::proto::hex
+}  // namespace loom::proto::hex

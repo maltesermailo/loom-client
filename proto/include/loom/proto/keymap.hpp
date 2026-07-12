@@ -13,7 +13,7 @@
 namespace loom::proto::keymap {
 
 class Keymap {
-public:
+ public:
   // Parse "from,to" integer rows; '#' comments and blank lines are ignored, and
   // surrounding whitespace on fields is tolerated. Malformed rows are skipped.
   static Keymap from_csv(std::string_view text);
@@ -23,8 +23,8 @@ public:
 
   std::size_t size() const { return map_.size(); }
 
-private:
+ private:
   std::unordered_map<std::int64_t, std::int64_t> map_;
 };
 
-} // namespace loom::proto::keymap
+}  // namespace loom::proto::keymap

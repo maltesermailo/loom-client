@@ -44,22 +44,22 @@ std::vector<std::uint8_t> encode_datagram(const DatagramHeader& h,
 
 const char* to_string(DropReason r) {
   switch (r) {
-  case DropReason::too_short:
-    return "too_short";
-  case DropReason::oversize:
-    return "oversize";
-  case DropReason::bad_magic:
-    return "bad_magic";
-  case DropReason::frag_count_zero:
-    return "frag_count_zero";
-  case DropReason::frag_index_range:
-    return "frag_index_range";
-  case DropReason::last_fragment_mismatch:
-    return "last_fragment_mismatch";
-  case DropReason::unknown_stream:
-    return "unknown_stream";
+    case DropReason::too_short:
+      return "too_short";
+    case DropReason::oversize:
+      return "oversize";
+    case DropReason::bad_magic:
+      return "bad_magic";
+    case DropReason::frag_count_zero:
+      return "frag_count_zero";
+    case DropReason::frag_index_range:
+      return "frag_index_range";
+    case DropReason::last_fragment_mismatch:
+      return "last_fragment_mismatch";
+    case DropReason::unknown_stream:
+      return "unknown_stream";
   }
-  return "unknown"; // unreachable; silences -Wreturn-type
+  return "unknown";  // unreachable; silences -Wreturn-type
 }
 
 static std::uint16_t be16(std::span<const std::uint8_t> b, std::size_t o) {
@@ -73,10 +73,9 @@ Result<DecodedDatagram, DropReason> decode(std::span<const std::uint8_t> bytes) 
 
   const std::uint8_t flags = bytes[1];
   const std::uint16_t stream_id = be16(bytes, 2);
-  const std::uint32_t frame_seq = (static_cast<std::uint32_t>(bytes[4]) << 24) |
-                                  (static_cast<std::uint32_t>(bytes[5]) << 16) |
-                                  (static_cast<std::uint32_t>(bytes[6]) << 8) |
-                                  static_cast<std::uint32_t>(bytes[7]);
+  const std::uint32_t frame_seq =
+      (static_cast<std::uint32_t>(bytes[4]) << 24) | (static_cast<std::uint32_t>(bytes[5]) << 16) |
+      (static_cast<std::uint32_t>(bytes[6]) << 8) | static_cast<std::uint32_t>(bytes[7]);
   const std::uint16_t frag_index = be16(bytes, 8);
   const std::uint16_t frag_count = be16(bytes, 10);
 
@@ -87,9 +86,9 @@ Result<DecodedDatagram, DropReason> decode(std::span<const std::uint8_t> bytes) 
     return Err(DropReason::last_fragment_mismatch);
   if (stream_id != 0 && stream_id != 1) return Err(DropReason::unknown_stream);
 
-  const DatagramHeader h{(flags & kFlagKeyframe) != 0, last,       stream_id,
-                         frame_seq,                    frag_index, frag_count};
+  const DatagramHeader h{
+      (flags & kFlagKeyframe) != 0, last, stream_id, frame_seq, frag_index, frag_count};
   return Ok(DecodedDatagram{h, bytes.size() - kHeaderLen});
 }
 
-} // namespace loom::proto
+}  // namespace loom::proto

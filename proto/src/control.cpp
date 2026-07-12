@@ -10,30 +10,30 @@ std::optional<std::span<const std::int64_t>> known_keys(std::uint64_t msg_type) 
   static constexpr std::int64_t k0_6[] = {0, 1, 2, 3, 4, 5, 6};
   using S = std::span<const std::int64_t>;
   switch (msg_type) {
-  case kHello:
-  case kConfig:
-    return S(k0_5);
-  case kWelcome:
-  case kClockPong:
-    return S(k012);
-  case kStats:
-    return S(k0_6);
-  case kError:
-  case kPairB:
-  case kPairResult:
-    return S(k01);
-  case kConfigAck:
-  case kInput:
-  case kIdrRequest:
-  case kClockPing:
-  case kBye:
-  case kPairA:
-  case kPairC:
-    return S(k0);
-  case kStart:
-    return S{}; // START has an empty body
-  default:
-    return std::nullopt;
+    case kHello:
+    case kConfig:
+      return S(k0_5);
+    case kWelcome:
+    case kClockPong:
+      return S(k012);
+    case kStats:
+      return S(k0_6);
+    case kError:
+    case kPairB:
+    case kPairResult:
+      return S(k01);
+    case kConfigAck:
+    case kInput:
+    case kIdrRequest:
+    case kClockPing:
+    case kBye:
+    case kPairA:
+    case kPairC:
+      return S(k0);
+    case kStart:
+      return S{};  // START has an empty body
+    default:
+      return std::nullopt;
   }
 }
 
@@ -65,10 +65,9 @@ static bool contains(std::span<const std::int64_t> keys, std::int64_t k) {
 Result<Decoded, ControlError> decode_frame(std::span<const std::uint8_t> bytes) {
   using E = ControlError;
   if (bytes.size() < 4) return Err(E::protocol_violation);
-  const std::uint32_t len = (static_cast<std::uint32_t>(bytes[0]) << 24) |
-                            (static_cast<std::uint32_t>(bytes[1]) << 16) |
-                            (static_cast<std::uint32_t>(bytes[2]) << 8) |
-                            static_cast<std::uint32_t>(bytes[3]);
+  const std::uint32_t len =
+      (static_cast<std::uint32_t>(bytes[0]) << 24) | (static_cast<std::uint32_t>(bytes[1]) << 16) |
+      (static_cast<std::uint32_t>(bytes[2]) << 8) | static_cast<std::uint32_t>(bytes[3]);
   // The length field alone is sufficient to reject an over-limit frame (§3.1).
   if (len > kMaxFrameBody) return Err(E::protocol_violation);
   if (bytes.size() - 4 < len) return Err(E::protocol_violation);
@@ -93,4 +92,4 @@ Result<Decoded, ControlError> decode_frame(std::span<const std::uint8_t> bytes) 
   return Ok(Decoded{Decoded::Kind::Message, msg_type, std::move(filtered)});
 }
 
-} // namespace loom::proto::control
+}  // namespace loom::proto::control

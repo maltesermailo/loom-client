@@ -21,14 +21,22 @@ inline constexpr std::uint64_t kInternal = 0x07;             // unrecoverable lo
 // Stable name for a code, for logs/UI. Unknown codes read as "INTERNAL" (§10).
 inline const char* name(std::uint64_t code) {
   switch (code) {
-    case kNone: return "NONE";
-    case kVersionUnsupported: return "VERSION_UNSUPPORTED";
-    case kBusy: return "BUSY";
-    case kNoCommonCodec: return "NO_COMMON_CODEC";
-    case kProtocolViolation: return "PROTOCOL_VIOLATION";
-    case kDatagramUnsupported: return "DATAGRAM_UNSUPPORTED";
-    case kAuthFailed: return "AUTH_FAILED";
-    default: return "INTERNAL";
+    case kNone:
+      return "NONE";
+    case kVersionUnsupported:
+      return "VERSION_UNSUPPORTED";
+    case kBusy:
+      return "BUSY";
+    case kNoCommonCodec:
+      return "NO_COMMON_CODEC";
+    case kProtocolViolation:
+      return "PROTOCOL_VIOLATION";
+    case kDatagramUnsupported:
+      return "DATAGRAM_UNSUPPORTED";
+    case kAuthFailed:
+      return "AUTH_FAILED";
+    default:
+      return "INTERNAL";
   }
 }
 

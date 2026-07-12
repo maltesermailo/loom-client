@@ -66,9 +66,8 @@ void Session::on_event(Event ev) {
       hello.emplace_back(Value::integer(0), Value::integer(1));  // protocol_version
       hello.emplace_back(Value::integer(1), Value::text(params_.client_name));
       hello.emplace_back(Value::integer(2), Value::array(std::move(codecs)));
-      hello.emplace_back(Value::integer(3),
-                         Value::array({Value::integer(params_.max_width),
-                                       Value::integer(params_.max_height)}));
+      hello.emplace_back(Value::integer(3), Value::array({Value::integer(params_.max_width),
+                                                          Value::integer(params_.max_height)}));
       hello.emplace_back(Value::integer(4), Value::integer(params_.max_refresh));
       hello.emplace_back(Value::integer(5),
                          Value::integer(static_cast<std::int64_t>(params_.features)));
@@ -133,8 +132,10 @@ void Session::on_tick(std::int64_t now_us) {
 
 std::vector<std::uint8_t> Session::encode_stats(const StatsInput& in) const {
   Value::Map body;
-  body.emplace_back(Value::integer(0), Value::integer(static_cast<std::int64_t>(in.frames_received)));
-  body.emplace_back(Value::integer(1), Value::integer(static_cast<std::int64_t>(in.frames_dropped)));
+  body.emplace_back(Value::integer(0),
+                    Value::integer(static_cast<std::int64_t>(in.frames_received)));
+  body.emplace_back(Value::integer(1),
+                    Value::integer(static_cast<std::int64_t>(in.frames_dropped)));
   body.emplace_back(Value::integer(2), Value::integer(static_cast<std::int64_t>(in.datagrams)));
   body.emplace_back(Value::integer(3), Value::floating(in.jitter_ms));
   body.emplace_back(Value::integer(4), Value::integer(static_cast<std::int64_t>(in.decode_us)));

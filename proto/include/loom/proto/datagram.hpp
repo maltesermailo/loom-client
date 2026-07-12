@@ -12,7 +12,7 @@
 
 namespace loom::proto {
 
-inline constexpr std::uint8_t kMagic = 0x4C; // 'L'
+inline constexpr std::uint8_t kMagic = 0x4C;  // 'L'
 inline constexpr std::uint8_t kFlagKeyframe = 0x01;
 inline constexpr std::uint8_t kFlagLastFragment = 0x02;
 inline constexpr std::size_t kHeaderLen = 12;
@@ -64,4 +64,4 @@ struct DecodedDatagram {
 // Decode and validate a datagram header per §4. Validation order is normative.
 Result<DecodedDatagram, DropReason> decode(std::span<const std::uint8_t> bytes);
 
-} // namespace loom::proto
+}  // namespace loom::proto

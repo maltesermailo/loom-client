@@ -1,6 +1,6 @@
-#include <doctest/doctest.h>
-
 #include "loom/proto/keymap.hpp"
+
+#include <doctest/doctest.h>
 
 using loom::proto::keymap::Keymap;
 

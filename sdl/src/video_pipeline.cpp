@@ -30,8 +30,8 @@ VideoPipeline::~VideoPipeline() {
 }
 
 std::int64_t VideoPipeline::now_ms() const {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::steady_clock::now() - start_)
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                               start_)
       .count();
 }
 
@@ -54,8 +54,7 @@ void VideoPipeline::feed_datagram(std::span<const std::uint8_t> datagram) {
       std::vector<std::uint8_t>(datagram.begin() + loom::proto::kHeaderLen, datagram.end());
 
   // Feed header metadata to the receive-model state machine.
-  reasm_.push(now_ms(),
-              reassembly::Fragment{h.frame_seq, h.frag_index, h.frag_count, h.keyframe});
+  reasm_.push(now_ms(), reassembly::Fragment{h.frame_seq, h.frag_index, h.frag_count, h.keyframe});
 
   const auto& events = reasm_.events();
   for (; seen_events_ < events.size(); ++seen_events_) {

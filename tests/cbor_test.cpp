@@ -1,9 +1,10 @@
+#include "loom/proto/cbor.hpp"
+
 #include <doctest/doctest.h>
 
 #include <string>
 
 #include "hex_util.hpp"
-#include "loom/proto/cbor.hpp"
 
 using loom::proto::cbor::decode;
 using loom::proto::cbor::encode_canonical;
@@ -35,7 +36,7 @@ TEST_CASE("canonical strings, bytes, and simple values") {
 }
 
 TEST_CASE("canonical maps sort by bytewise-encoded key") {
-  Value::Map m; // inserted out of order
+  Value::Map m;  // inserted out of order
   m.emplace_back(Value::integer(2), Value::integer(0));
   m.emplace_back(Value::integer(0), Value::integer(0));
   m.emplace_back(Value::integer(1), Value::integer(0));
@@ -72,7 +73,7 @@ TEST_CASE("canonical floats use the shortest lossless form") {
   CHECK(enc(Value::floating(2.5)) == "f94100");  // exact in f16
   CHECK(enc(Value::floating(0.0)) == "f90000");
   CHECK(enc(Value::floating(1.0)) == "f93c00");
-  CHECK(enc(Value::floating(0.1)) == "fb3fb999999999999a"); // not f16/f32-exact -> f64
+  CHECK(enc(Value::floating(0.1)) == "fb3fb999999999999a");  // not f16/f32-exact -> f64
   REQUIRE(decode(from_hex("f94100")).has_value());
   CHECK(*decode(from_hex("f94100")) == Value::floating(2.5));
   REQUIRE(decode(from_hex("fb3fb999999999999a")).has_value());
@@ -80,7 +81,7 @@ TEST_CASE("canonical floats use the shortest lossless form") {
 }
 
 TEST_CASE("decode rejects truncated and indefinite-length input") {
-  CHECK_FALSE(decode(from_hex("82")).has_value());   // array(2) with no items
+  CHECK_FALSE(decode(from_hex("82")).has_value());    // array(2) with no items
   CHECK_FALSE(decode(from_hex("8205")).has_value());  // array(2) with one item
   CHECK_FALSE(decode(from_hex("9f")).has_value());    // indefinite-length array
 }

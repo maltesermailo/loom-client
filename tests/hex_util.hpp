@@ -5,4 +5,4 @@
 namespace loomtest {
 using loom::proto::hex::from_hex;
 using loom::proto::hex::to_hex;
-} // namespace loomtest
+}  // namespace loomtest

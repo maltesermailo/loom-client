@@ -22,14 +22,14 @@ struct Estimate {
 };
 
 class ClockFilter {
-public:
+ public:
   // Incorporate one sample and return the current estimate after it.
   // t0, t3 are client-clock us (ping send / pong receive); t1, t2 are host-clock
   // us (host receive / host send).
   Estimate push(std::int64_t t0, std::int64_t t1, std::int64_t t2, std::int64_t t3);
 
-private:
+ private:
   std::deque<Estimate> window_;
 };
 
-} // namespace loom::proto::clocksync
+}  // namespace loom::proto::clocksync

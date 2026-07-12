@@ -15,9 +15,9 @@
 namespace loom::proto::cbor {
 
 class Value {
-public:
+ public:
   using Array = std::vector<Value>;
-  using Map = std::vector<std::pair<Value, Value>>; // order here is irrelevant; encode sorts
+  using Map = std::vector<std::pair<Value, Value>>;  // order here is irrelevant; encode sorts
   // Order MUST match the private variant's alternative order (type() casts index).
   enum class Type { Null, Bool, Int, Bytes, Text, Array, Map, Float };
 
@@ -42,10 +42,10 @@ public:
 
   bool operator==(const Value&) const = default;
 
-private:
+ private:
   using Variant = std::variant<std::monostate, bool, std::int64_t, std::vector<std::uint8_t>,
                                std::string, Array, Map, double>;
-  Value() = default; // Null (monostate)
+  Value() = default;  // Null (monostate)
   explicit Value(Variant v) : v_(std::move(v)) {}
   Variant v_;
 };
@@ -59,4 +59,4 @@ std::vector<std::uint8_t> encode_canonical(const Value& v);
 // rejected.
 std::optional<Value> decode(std::span<const std::uint8_t> bytes);
 
-} // namespace loom::proto::cbor
+}  // namespace loom::proto::cbor

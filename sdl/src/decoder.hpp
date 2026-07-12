@@ -27,7 +27,7 @@ struct DecodedFrame {
 };
 
 class HevcDecoder {
-public:
+ public:
   HevcDecoder();
   ~HevcDecoder();
   HevcDecoder(const HevcDecoder&) = delete;
@@ -39,7 +39,7 @@ public:
   // produced (1:1 in low-delay mode).
   bool decode(std::span<const std::uint8_t> au, DecodedFrame& out);
 
-private:
+ private:
   AVCodecContext* ctx_ = nullptr;
   AVPacket* pkt_ = nullptr;
   AVFrame* frame_ = nullptr;

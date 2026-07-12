@@ -112,8 +112,8 @@ QUIC_STATUS MsQuicTransport::on_connection(HQUIC conn, QUIC_CONNECTION_EVENT* ev
   switch (ev->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
       // Open the single client-initiated bidirectional control stream (§1).
-      if (QUIC_SUCCEEDED(api_->StreamOpen(conn, QUIC_STREAM_OPEN_FLAG_NONE, stream_trampoline,
-                                          this, &control_))) {
+      if (QUIC_SUCCEEDED(api_->StreamOpen(conn, QUIC_STREAM_OPEN_FLAG_NONE, stream_trampoline, this,
+                                          &control_))) {
         api_->StreamStart(control_, QUIC_STREAM_START_FLAG_NONE);
       }
       push({TransportEvent::Kind::Connected, {}, 0});
@@ -125,8 +125,7 @@ QUIC_STATUS MsQuicTransport::on_connection(HQUIC conn, QUIC_CONNECTION_EVENT* ev
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-      push({TransportEvent::Kind::Closed, {},
-            ev->SHUTDOWN_INITIATED_BY_PEER.ErrorCode});
+      push({TransportEvent::Kind::Closed, {}, ev->SHUTDOWN_INITIATED_BY_PEER.ErrorCode});
       break;
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
       push({TransportEvent::Kind::Closed, {}, 0});

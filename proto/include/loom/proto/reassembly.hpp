@@ -37,27 +37,27 @@ struct Event {
   enum class Kind { Deliver, IdrRequest };
   Kind kind;
   std::int64_t t_ms;
-  std::uint32_t frame_seq = 0; // Deliver only
-  bool keyframe = false;       // Deliver only
-  std::uint32_t last_good = 0; // IdrRequest only (newest fully-decoded frame, 0 if none)
+  std::uint32_t frame_seq = 0;  // Deliver only
+  bool keyframe = false;        // Deliver only
+  std::uint32_t last_good = 0;  // IdrRequest only (newest fully-decoded frame, 0 if none)
   bool operator==(const Event&) const = default;
 };
 
 struct Counters {
-  std::uint64_t dropped_incomplete = 0; // rule-2 evictions + rule-1 cleanup of incompletes
-  std::uint64_t discarded_gap = 0;      // completed frames failing decode gating (§6.3)
-  std::uint64_t stale_fragments = 0;    // rule-1 stale + below-window drops
+  std::uint64_t dropped_incomplete = 0;  // rule-2 evictions + rule-1 cleanup of incompletes
+  std::uint64_t discarded_gap = 0;       // completed frames failing decode gating (§6.3)
+  std::uint64_t stale_fragments = 0;     // rule-1 stale + below-window drops
   bool operator==(const Counters&) const = default;
 };
 
 class Reassembler {
-public:
+ public:
   // Feed one fragment that arrived at t_ms; appends any resulting events.
   void push(std::int64_t t_ms, const Fragment& frag);
   const std::vector<Event>& events() const { return events_; }
   const Counters& counters() const { return counters_; }
 
-private:
+ private:
   struct Incomplete {
     std::uint16_t need;
     std::set<std::uint16_t> have;
@@ -76,4 +76,4 @@ private:
   std::optional<std::int64_t> idr_last_good_at_request_;
 };
 
-} // namespace loom::proto::reassembly
+}  // namespace loom::proto::reassembly

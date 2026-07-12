@@ -48,10 +48,9 @@ bool HevcDecoder::decode(std::span<const std::uint8_t> au, DecodedFrame& out) {
   if (avcodec_receive_frame(ctx_, frame_) < 0) {
     return false;  // EAGAIN (needs more input) or error
   }
-  out.decode_us = static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::steady_clock::now() - t_start)
-          .count());
+  out.decode_us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                 std::chrono::steady_clock::now() - t_start)
+                                                 .count());
   if (frame_->format != AV_PIX_FMT_YUV420P) {
     return false;  // §5 mandates 4:2:0 8-bit; anything else is a host bug
   }

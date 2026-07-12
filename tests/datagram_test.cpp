@@ -1,3 +1,5 @@
+#include "loom/proto/datagram.hpp"
+
 #include <doctest/doctest.h>
 
 #include <string>
@@ -5,7 +7,6 @@
 #include <vector>
 
 #include "hex_util.hpp"
-#include "loom/proto/datagram.hpp"
 
 using loom::proto::decode;
 using loom::proto::DropReason;
@@ -16,11 +17,11 @@ using loomtest::to_hex;
 
 namespace {
 // Encode a datagram to hex. Empty payload yields the 12-byte header alone.
-std::string enc(bool kf, std::uint16_t sid, std::uint32_t seq, std::uint16_t idx,
-                std::uint16_t cnt, std::string_view payload_hex) {
+std::string enc(bool kf, std::uint16_t sid, std::uint32_t seq, std::uint16_t idx, std::uint16_t cnt,
+                std::string_view payload_hex) {
   return to_hex(encode_datagram(make_header(kf, sid, seq, idx, cnt), from_hex(payload_hex)));
 }
-} // namespace
+}  // namespace
 
 TEST_CASE("encode derives KEYFRAME/LAST flags and big-endian layout") {
   // keyframe + single fragment (idx0/cnt1 => last) => flags 0x03
@@ -73,14 +74,14 @@ TEST_CASE("decode enforces every validation rule, in order (with reason strings)
 }
 
 TEST_CASE("decode oversize vs the 1350-byte boundary") {
-  const std::vector<std::uint8_t> over_payload(1339, 0x00); // 12 + 1339 = 1351
+  const std::vector<std::uint8_t> over_payload(1339, 0x00);  // 12 + 1339 = 1351
   const auto over = encode_datagram(make_header(false, 0, 0, 0, 1), over_payload);
   CHECK(over.size() == 1351);
   REQUIRE_FALSE(decode(over).has_value());
   CHECK(decode(over).error() == DropReason::oversize);
   CHECK(std::string(to_string(DropReason::oversize)) == "oversize");
 
-  const std::vector<std::uint8_t> max_payload(1338, 0x00); // 12 + 1338 = 1350 (allowed)
+  const std::vector<std::uint8_t> max_payload(1338, 0x00);  // 12 + 1338 = 1350 (allowed)
   const auto ok = encode_datagram(make_header(false, 0, 0, 0, 1), max_payload);
   CHECK(ok.size() == 1350);
   CHECK(decode(ok).has_value());

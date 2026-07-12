@@ -1,9 +1,9 @@
 #include "renderer.hpp"
 
-#include <cstdlib>
-
 #include <SDL.h>
 #include <SDL_ttf.h>
+
+#include <cstdlib>
 
 namespace loom::sdl {
 namespace {
@@ -34,8 +34,8 @@ Renderer::Renderer(const std::string& title, int width, int height) {
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     return;
   }
-  window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             width, height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+  window_ = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width,
+                             height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   if (window_ == nullptr) {
     return;
   }
@@ -64,8 +64,8 @@ void Renderer::ensure_texture(int width, int height) {
   if (texture_ != nullptr) {
     SDL_DestroyTexture(texture_);
   }
-  texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING,
-                               width, height);
+  texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, width,
+                               height);
   tex_w_ = width;
   tex_h_ = height;
 }

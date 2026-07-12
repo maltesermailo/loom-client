@@ -17,7 +17,7 @@ struct TTF_Font;
 namespace loom::sdl {
 
 class Renderer {
-public:
+ public:
   Renderer(const std::string& title, int width, int height);
   ~Renderer();
   Renderer(const Renderer&) = delete;
@@ -32,7 +32,7 @@ public:
   // Pump SDL events; returns true if the user asked to quit (window close / Esc).
   bool poll_quit();
 
-private:
+ private:
   void ensure_texture(int width, int height);
   void draw_overlay(const std::vector<std::string>& lines);
 

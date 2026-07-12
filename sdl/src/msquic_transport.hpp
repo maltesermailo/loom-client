@@ -20,7 +20,7 @@
 namespace loom::sdl {
 
 class MsQuicTransport : public ITransport {
-public:
+ public:
   MsQuicTransport();
   ~MsQuicTransport() override;
 
@@ -32,7 +32,7 @@ public:
   std::optional<TransportEvent> next_event() override;
   void close(std::uint64_t code) override;
 
-private:
+ private:
   // msquic C callbacks trampoline into these.
   QUIC_STATUS on_connection(HQUIC conn, QUIC_CONNECTION_EVENT* ev);
   QUIC_STATUS on_stream(HQUIC stream, QUIC_STREAM_EVENT* ev);

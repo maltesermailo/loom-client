@@ -9,8 +9,8 @@ namespace loom::sdl {
 
 inline std::int64_t now_us() {
   static const auto epoch = std::chrono::steady_clock::now();
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::steady_clock::now() - epoch)
+  return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
+                                                               epoch)
       .count();
 }
 

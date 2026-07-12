@@ -19,7 +19,9 @@ Value::Type Value::type() const { return static_cast<Type>(v_.index()); }
 bool Value::as_bool() const { return std::get<bool>(v_); }
 std::int64_t Value::as_int() const { return std::get<std::int64_t>(v_); }
 double Value::as_float() const { return std::get<double>(v_); }
-const std::vector<std::uint8_t>& Value::as_bytes() const { return std::get<std::vector<std::uint8_t>>(v_); }
+const std::vector<std::uint8_t>& Value::as_bytes() const {
+  return std::get<std::vector<std::uint8_t>>(v_);
+}
 const std::string& Value::as_text() const { return std::get<std::string>(v_); }
 const Value::Array& Value::as_array() const { return std::get<Array>(v_); }
 const Value::Map& Value::as_map() const { return std::get<Map>(v_); }
@@ -59,9 +61,9 @@ static float f16_to_f32(std::uint16_t h) {
   std::uint32_t out;
   if (e == 0) {
     if (m == 0) {
-      out = sign; // +/- zero
+      out = sign;  // +/- zero
     } else {
-      while ((m & 0x400u) == 0) { // normalize subnormal
+      while ((m & 0x400u) == 0) {  // normalize subnormal
         m <<= 1;
         e--;
       }
@@ -70,7 +72,7 @@ static float f16_to_f32(std::uint16_t h) {
       out = sign | ((e + (127 - 15)) << 23) | (m << 13);
     }
   } else if (e == 0x1fu) {
-    out = sign | 0x7f800000u | (m << 13); // Inf / NaN
+    out = sign | 0x7f800000u | (m << 13);  // Inf / NaN
   } else {
     out = sign | ((e - 15 + 127) << 23) | (m << 13);
   }
@@ -85,12 +87,13 @@ static std::uint16_t f32_to_f16(float value) {
   std::uint32_t sign = (x >> 16) & 0x8000u;
   std::uint32_t biased = (x >> 23) & 0xffu;
   std::uint32_t m = x & 0x7fffffu;
-  if (biased == 0xff) return static_cast<std::uint16_t>(sign | 0x7c00u | (m ? 0x200u : 0)); // Inf/NaN
+  if (biased == 0xff)
+    return static_cast<std::uint16_t>(sign | 0x7c00u | (m ? 0x200u : 0));  // Inf/NaN
   std::int32_t e = static_cast<std::int32_t>(biased) - 127 + 15;
-  if (e >= 0x1f) return static_cast<std::uint16_t>(sign | 0x7c00u); // overflow -> Inf
+  if (e >= 0x1f) return static_cast<std::uint16_t>(sign | 0x7c00u);  // overflow -> Inf
   if (e <= 0) {
-    if (e < -10) return static_cast<std::uint16_t>(sign); // underflow -> 0
-    m |= 0x800000u;                                       // restore implicit 1
+    if (e < -10) return static_cast<std::uint16_t>(sign);  // underflow -> 0
+    m |= 0x800000u;                                        // restore implicit 1
     std::uint32_t shift = static_cast<std::uint32_t>(14 - e);
     std::uint32_t half = m >> shift;
     std::uint32_t rem = m & ((1u << shift) - 1);
@@ -100,7 +103,7 @@ static std::uint16_t f32_to_f16(float value) {
   }
   std::uint32_t half = (static_cast<std::uint32_t>(e) << 10) | (m >> 13);
   std::uint32_t rem = m & 0x1fffu;
-  if (rem > 0x1000u || (rem == 0x1000u && (half & 1))) half++; // may carry into exponent
+  if (rem > 0x1000u || (rem == 0x1000u && (half & 1))) half++;  // may carry into exponent
   return static_cast<std::uint16_t>(sign | half);
 }
 
@@ -113,7 +116,7 @@ static void encode_float(std::vector<std::uint8_t>& out, double d) {
   };
   if (std::isnan(d)) {
     out.push_back(0xf9);
-    push_be(0x7e00, 2); // canonical quiet NaN
+    push_be(0x7e00, 2);  // canonical quiet NaN
     return;
   }
   const float f = static_cast<float>(d);
@@ -138,55 +141,55 @@ static void encode_float(std::vector<std::uint8_t>& out, double d) {
 
 static void encode_into(std::vector<std::uint8_t>& out, const Value& v) {
   switch (v.type()) {
-  case Value::Type::Null:
-    out.push_back(0xf6);
-    break;
-  case Value::Type::Bool:
-    out.push_back(v.as_bool() ? 0xf5 : 0xf4);
-    break;
-  case Value::Type::Int: {
-    const std::int64_t i = v.as_int();
-    if (i >= 0)
-      put_head(out, 0, static_cast<std::uint64_t>(i));
-    else
-      put_head(out, 1, static_cast<std::uint64_t>(-(i + 1)));
-    break;
-  }
-  case Value::Type::Float:
-    encode_float(out, v.as_float());
-    break;
-  case Value::Type::Bytes: {
-    const auto& b = v.as_bytes();
-    put_head(out, 2, b.size());
-    out.insert(out.end(), b.begin(), b.end());
-    break;
-  }
-  case Value::Type::Text: {
-    const auto& s = v.as_text();
-    put_head(out, 3, s.size());
-    out.insert(out.end(), s.begin(), s.end());
-    break;
-  }
-  case Value::Type::Array: {
-    const auto& a = v.as_array();
-    put_head(out, 4, a.size());
-    for (const auto& e : a) encode_into(out, e);
-    break;
-  }
-  case Value::Type::Map: {
-    // Canonical: sort entries by the bytewise encoding of their keys.
-    std::vector<std::pair<std::vector<std::uint8_t>, std::vector<std::uint8_t>>> items;
-    for (const auto& [k, val] : v.as_map())
-      items.push_back({encode_canonical(k), encode_canonical(val)});
-    std::sort(items.begin(), items.end(),
-              [](const auto& a, const auto& b) { return a.first < b.first; });
-    put_head(out, 5, items.size());
-    for (const auto& [kb, vb] : items) {
-      out.insert(out.end(), kb.begin(), kb.end());
-      out.insert(out.end(), vb.begin(), vb.end());
+    case Value::Type::Null:
+      out.push_back(0xf6);
+      break;
+    case Value::Type::Bool:
+      out.push_back(v.as_bool() ? 0xf5 : 0xf4);
+      break;
+    case Value::Type::Int: {
+      const std::int64_t i = v.as_int();
+      if (i >= 0)
+        put_head(out, 0, static_cast<std::uint64_t>(i));
+      else
+        put_head(out, 1, static_cast<std::uint64_t>(-(i + 1)));
+      break;
     }
-    break;
-  }
+    case Value::Type::Float:
+      encode_float(out, v.as_float());
+      break;
+    case Value::Type::Bytes: {
+      const auto& b = v.as_bytes();
+      put_head(out, 2, b.size());
+      out.insert(out.end(), b.begin(), b.end());
+      break;
+    }
+    case Value::Type::Text: {
+      const auto& s = v.as_text();
+      put_head(out, 3, s.size());
+      out.insert(out.end(), s.begin(), s.end());
+      break;
+    }
+    case Value::Type::Array: {
+      const auto& a = v.as_array();
+      put_head(out, 4, a.size());
+      for (const auto& e : a) encode_into(out, e);
+      break;
+    }
+    case Value::Type::Map: {
+      // Canonical: sort entries by the bytewise encoding of their keys.
+      std::vector<std::pair<std::vector<std::uint8_t>, std::vector<std::uint8_t>>> items;
+      for (const auto& [k, val] : v.as_map())
+        items.push_back({encode_canonical(k), encode_canonical(val)});
+      std::sort(items.begin(), items.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+      put_head(out, 5, items.size());
+      for (const auto& [kb, vb] : items) {
+        out.insert(out.end(), kb.begin(), kb.end());
+        out.insert(out.end(), vb.begin(), vb.end());
+      }
+      break;
+    }
   }
 }
 
@@ -225,63 +228,63 @@ static std::optional<Value> decode_item(std::span<const std::uint8_t> b, std::si
   else if (ai == 27 && !read_be(b, pos, 8, arg))
     return std::nullopt;
   else if (ai >= 28)
-    return std::nullopt; // 28-30 reserved, 31 indefinite: unsupported
+    return std::nullopt;  // 28-30 reserved, 31 indefinite: unsupported
 
   switch (major) {
-  case 0:
-    if (arg > static_cast<std::uint64_t>(INT64_MAX)) return std::nullopt;
-    return Value::integer(static_cast<std::int64_t>(arg));
-  case 1:
-    if (arg > static_cast<std::uint64_t>(INT64_MAX)) return std::nullopt;
-    return Value::integer(-1 - static_cast<std::int64_t>(arg));
-  case 2:
-  case 3: {
-    if (arg > b.size() - pos) return std::nullopt;
-    const std::uint8_t* p = b.data() + pos;
-    const std::size_t n = static_cast<std::size_t>(arg);
-    pos += n;
-    if (major == 2) return Value::bytes(std::vector<std::uint8_t>(p, p + n));
-    return Value::text(std::string(reinterpret_cast<const char*>(p), n));
-  }
-  case 4: {
-    Value::Array a; // no reserve: arg is untrusted
-    for (std::uint64_t k = 0; k < arg; ++k) {
-      auto item = decode_item(b, pos);
-      if (!item) return std::nullopt;
-      a.push_back(std::move(*item));
+    case 0:
+      if (arg > static_cast<std::uint64_t>(INT64_MAX)) return std::nullopt;
+      return Value::integer(static_cast<std::int64_t>(arg));
+    case 1:
+      if (arg > static_cast<std::uint64_t>(INT64_MAX)) return std::nullopt;
+      return Value::integer(-1 - static_cast<std::int64_t>(arg));
+    case 2:
+    case 3: {
+      if (arg > b.size() - pos) return std::nullopt;
+      const std::uint8_t* p = b.data() + pos;
+      const std::size_t n = static_cast<std::size_t>(arg);
+      pos += n;
+      if (major == 2) return Value::bytes(std::vector<std::uint8_t>(p, p + n));
+      return Value::text(std::string(reinterpret_cast<const char*>(p), n));
     }
-    return Value::array(std::move(a));
-  }
-  case 5: {
-    Value::Map m;
-    for (std::uint64_t k = 0; k < arg; ++k) {
-      auto key = decode_item(b, pos);
-      if (!key) return std::nullopt;
-      auto val = decode_item(b, pos);
-      if (!val) return std::nullopt;
-      m.emplace_back(std::move(*key), std::move(*val));
+    case 4: {
+      Value::Array a;  // no reserve: arg is untrusted
+      for (std::uint64_t k = 0; k < arg; ++k) {
+        auto item = decode_item(b, pos);
+        if (!item) return std::nullopt;
+        a.push_back(std::move(*item));
+      }
+      return Value::array(std::move(a));
     }
-    return Value::map(std::move(m));
-  }
-  case 7:
-    if (ai == 20) return Value::boolean(false);
-    if (ai == 21) return Value::boolean(true);
-    if (ai == 22) return Value::null();
-    if (ai == 25) return Value::floating(f16_to_f32(static_cast<std::uint16_t>(arg)));
-    if (ai == 26) {
-      float f;
-      const std::uint32_t bits = static_cast<std::uint32_t>(arg);
-      std::memcpy(&f, &bits, 4);
-      return Value::floating(f);
+    case 5: {
+      Value::Map m;
+      for (std::uint64_t k = 0; k < arg; ++k) {
+        auto key = decode_item(b, pos);
+        if (!key) return std::nullopt;
+        auto val = decode_item(b, pos);
+        if (!val) return std::nullopt;
+        m.emplace_back(std::move(*key), std::move(*val));
+      }
+      return Value::map(std::move(m));
     }
-    if (ai == 27) {
-      double d;
-      std::memcpy(&d, &arg, 8);
-      return Value::floating(d);
-    }
-    return std::nullopt; // other simple values are unused by Loom
-  default:
-    return std::nullopt;
+    case 7:
+      if (ai == 20) return Value::boolean(false);
+      if (ai == 21) return Value::boolean(true);
+      if (ai == 22) return Value::null();
+      if (ai == 25) return Value::floating(f16_to_f32(static_cast<std::uint16_t>(arg)));
+      if (ai == 26) {
+        float f;
+        const std::uint32_t bits = static_cast<std::uint32_t>(arg);
+        std::memcpy(&f, &bits, 4);
+        return Value::floating(f);
+      }
+      if (ai == 27) {
+        double d;
+        std::memcpy(&d, &arg, 8);
+        return Value::floating(d);
+      }
+      return std::nullopt;  // other simple values are unused by Loom
+    default:
+      return std::nullopt;
   }
 }
 
@@ -290,4 +293,4 @@ std::optional<Value> decode(std::span<const std::uint8_t> bytes) {
   return decode_item(bytes, pos);
 }
 
-} // namespace loom::proto::cbor
+}  // namespace loom::proto::cbor

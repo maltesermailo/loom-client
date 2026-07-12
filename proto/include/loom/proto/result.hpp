@@ -14,21 +14,26 @@ namespace loom {
 
 // Distinct wrapper types so Result<T, E> is unambiguous even when T == E
 // (e.g. Result<int, int>): Ok<int> and Err<int> are different alternatives.
-template <class T> struct Ok {
+template <class T>
+struct Ok {
   T value;
 };
-template <class E> struct Err {
+template <class E>
+struct Err {
   E error;
 };
 
 // Deduction guides so `Ok(x)` / `Err(x)` infer their payload type.
-template <class T> Ok(T) -> Ok<T>;
-template <class E> Err(E) -> Err<E>;
+template <class T>
+Ok(T) -> Ok<T>;
+template <class E>
+Err(E) -> Err<E>;
 
-template <class T, class E> class Result {
-public:
-  Result(Ok<T> ok) : data_(std::move(ok)) {}    // NOLINT(google-explicit-constructor)
-  Result(Err<E> err) : data_(std::move(err)) {} // NOLINT(google-explicit-constructor)
+template <class T, class E>
+class Result {
+ public:
+  Result(Ok<T> ok) : data_(std::move(ok)) {}     // NOLINT(google-explicit-constructor)
+  Result(Err<E> err) : data_(std::move(err)) {}  // NOLINT(google-explicit-constructor)
 
   bool has_value() const { return std::holds_alternative<Ok<T>>(data_); }
   explicit operator bool() const { return has_value(); }
@@ -38,8 +43,8 @@ public:
   const E& error() const { return std::get<Err<E>>(data_).error; }
   E& error() { return std::get<Err<E>>(data_).error; }
 
-private:
+ private:
   std::variant<Ok<T>, Err<E>> data_;
 };
 
-} // namespace loom
+}  // namespace loom

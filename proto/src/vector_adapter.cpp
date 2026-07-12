@@ -11,11 +11,10 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <json.hpp>
 #include <optional>
 #include <string>
 #include <vector>
-
-#include <json.hpp>
 
 #include "loom/proto/cbor.hpp"
 #include "loom/proto/clocksync.hpp"
@@ -39,7 +38,8 @@ namespace hex = loom::proto::hex;
 static cbor::Value json_to_cbor(const json& j) {
   if (j.is_null()) return cbor::Value::null();
   if (j.is_boolean()) return cbor::Value::boolean(j.get<bool>());
-  if (j.is_number_integer() || j.is_number_unsigned()) return cbor::Value::integer(j.get<std::int64_t>());
+  if (j.is_number_integer() || j.is_number_unsigned())
+    return cbor::Value::integer(j.get<std::int64_t>());
   if (j.is_number_float()) return cbor::Value::floating(j.get<double>());
   if (j.is_string()) return cbor::Value::text(j.get<std::string>());
   if (j.is_array()) {
@@ -48,7 +48,8 @@ static cbor::Value json_to_cbor(const json& j) {
     return cbor::Value::array(std::move(a));
   }
   // object: either a {"$hex": ...} byte string, or a map with integer keys.
-  if (j.size() == 1 && j.contains("$hex")) return cbor::Value::bytes(hex::from_hex(j.at("$hex").get<std::string>()));
+  if (j.size() == 1 && j.contains("$hex"))
+    return cbor::Value::bytes(hex::from_hex(j.at("$hex").get<std::string>()));
   cbor::Value::Map m;
   for (auto it = j.begin(); it != j.end(); ++it)
     m.emplace_back(cbor::Value::integer(std::stoll(it.key())), json_to_cbor(it.value()));
@@ -58,31 +59,31 @@ static cbor::Value json_to_cbor(const json& j) {
 static json cbor_to_json(const cbor::Value& v) {
   using T = cbor::Value::Type;
   switch (v.type()) {
-  case T::Null:
-    return nullptr;
-  case T::Bool:
-    return v.as_bool();
-  case T::Int:
-    return v.as_int();
-  case T::Float:
-    return v.as_float();
-  case T::Text:
-    return v.as_text();
-  case T::Bytes: {
-    json o;
-    o["$hex"] = hex::to_hex(v.as_bytes());
-    return o;
-  }
-  case T::Array: {
-    json a = json::array();
-    for (const auto& e : v.as_array()) a.push_back(cbor_to_json(e));
-    return a;
-  }
-  case T::Map: {
-    json o = json::object();
-    for (const auto& [k, val] : v.as_map()) o[std::to_string(k.as_int())] = cbor_to_json(val);
-    return o;
-  }
+    case T::Null:
+      return nullptr;
+    case T::Bool:
+      return v.as_bool();
+    case T::Int:
+      return v.as_int();
+    case T::Float:
+      return v.as_float();
+    case T::Text:
+      return v.as_text();
+    case T::Bytes: {
+      json o;
+      o["$hex"] = hex::to_hex(v.as_bytes());
+      return o;
+    }
+    case T::Array: {
+      json a = json::array();
+      for (const auto& e : v.as_array()) a.push_back(cbor_to_json(e));
+      return a;
+    }
+    case T::Map: {
+      json o = json::object();
+      for (const auto& [k, val] : v.as_map()) o[std::to_string(k.as_int())] = cbor_to_json(val);
+      return o;
+    }
   }
   return nullptr;
 }
@@ -90,9 +91,10 @@ static json cbor_to_json(const cbor::Value& v) {
 // ---------------------------------------------------------------- ops
 
 static json datagram_encode(const json& in) {
-  const auto h = proto::make_header(in.at("flags_keyframe").get<bool>(), in.at("stream_id").get<std::uint16_t>(),
-                                    in.at("frame_seq").get<std::uint32_t>(), in.at("frag_index").get<std::uint16_t>(),
-                                    in.at("frag_count").get<std::uint16_t>());
+  const auto h = proto::make_header(
+      in.at("flags_keyframe").get<bool>(), in.at("stream_id").get<std::uint16_t>(),
+      in.at("frame_seq").get<std::uint32_t>(), in.at("frag_index").get<std::uint16_t>(),
+      in.at("frag_count").get<std::uint16_t>());
   const auto payload = hex::from_hex(in.at("payload").get<std::string>());
   return json{{"hex", hex::to_hex(proto::encode_datagram(h, payload))}};
 }
@@ -125,13 +127,15 @@ static json control_decode(const json& in) {
   if (!r.has_value()) return json{{"ok", false}, {"error", control::to_string(r.error())}};
   const auto& d = r.value();
   if (d.kind == control::Decoded::Kind::Ignored) return json{{"ok", true}, {"ignored", true}};
-  return json{{"ok", true}, {"msg_type", d.msg_type}, {"body", cbor_to_json(cbor::Value::map(d.body))}};
+  return json{
+      {"ok", true}, {"msg_type", d.msg_type}, {"body", cbor_to_json(cbor::Value::map(d.body))}};
 }
 
 static json reassembly_trace(const json& in) {
   reasm::Reassembler r;
   for (const auto& d : in.at("trace")) {
-    const reasm::Fragment f{d.at("frame_seq").get<std::uint32_t>(), d.at("frag_index").get<std::uint16_t>(),
+    const reasm::Fragment f{d.at("frame_seq").get<std::uint32_t>(),
+                            d.at("frag_index").get<std::uint16_t>(),
                             d.at("frag_count").get<std::uint16_t>(), d.at("keyframe").get<bool>()};
     r.push(d.at("t_ms").get<std::int64_t>(), f);
   }
@@ -186,7 +190,8 @@ static std::string read_file(const std::filesystem::path& p) {
 static std::filesystem::path find_keymaps_dir() {
   std::vector<std::filesystem::path> candidates;
   if (const char* e = std::getenv("LOOM_KEYMAPS_DIR")) candidates.emplace_back(e);
-  for (const char* c : {"spec/keymaps", "../spec/keymaps", "../../spec/keymaps"}) candidates.emplace_back(c);
+  for (const char* c : {"spec/keymaps", "../spec/keymaps", "../../spec/keymaps"})
+    candidates.emplace_back(c);
   for (const auto& c : candidates)
     if (std::filesystem::is_regular_file(c / "akeycode_to_evdev.csv")) return c;
   return {};
@@ -200,7 +205,8 @@ int main(int argc, char** argv) {
     return 2;
   }
   const std::string category = argv[1];
-  const std::string input((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
+  const std::string input((std::istreambuf_iterator<char>(std::cin)),
+                          std::istreambuf_iterator<char>());
   const json doc = json::parse(input);
 
   std::optional<keymap::Keymap> ak2ev, ev2cg;
