@@ -36,17 +36,30 @@ public:
   VideoPipeline(const VideoPipeline&) = delete;
   VideoPipeline& operator=(const VideoPipeline&) = delete;
 
+  // Cumulative receive counters (main-thread reads).
+  struct Counters {
+    std::uint64_t frames_received = 0;  // frames delivered to the decoder
+    std::uint64_t frames_dropped = 0;   // reassembler drops (loss + gap + stale)
+    std::uint64_t datagrams = 0;        // video datagrams accepted
+    std::uint64_t bytes = 0;            // video datagram bytes (for bitrate)
+  };
+
   // Feed one media datagram (main thread).
   void feed_datagram(std::span<const std::uint8_t> datagram);
 
   // Newest decoded frame since the last call, or nullptr (main thread).
   std::shared_ptr<const DecodedFrame> take_frame();
 
+  // Snapshot of the cumulative counters (main thread).
+  Counters counters() const { return counters_; }
+
 private:
   void decode_loop();
   std::int64_t now_ms() const;
   void deliver_frame(std::uint32_t frame_seq);
   void prune(std::uint32_t newest);
+
+  Counters counters_;
 
   IdrRequestFn on_idr_;
   loom::proto::reassembly::Reassembler reasm_;
@@ -60,11 +73,17 @@ private:
   std::map<std::uint32_t, Pending> pending_;
   std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 
+  // One access unit queued for decode, with its host capture timestamp.
+  struct QueuedAu {
+    std::uint64_t capture_ts;
+    std::vector<std::uint8_t> data;
+  };
+
   // Decode thread + its work queue and latest-frame slot.
   std::thread thread_;
   std::mutex mu_;
   std::condition_variable cv_;
-  std::queue<std::vector<std::uint8_t>> au_queue_;
+  std::queue<QueuedAu> au_queue_;
   std::shared_ptr<const DecodedFrame> latest_;
   bool has_new_ = false;
   bool stop_ = false;

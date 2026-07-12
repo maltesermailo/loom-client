@@ -43,18 +43,33 @@ set_target_properties(msquic PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES ${MSQUIC_INSTALL}/include)
 add_dependencies(msquic msquic_ext)
 
-# SDL2 + libavcodec/util for display and decode (Homebrew, via pkg-config).
+# SDL2 (+ttf) + libavcodec/util for display, overlay, and decode (Homebrew).
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+pkg_check_modules(SDL2_TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil)
 
-add_executable(loom-sdl
-  src/main.cpp
+# The media/instrumentation units, shared by loom-sdl and its tests.
+add_library(loom_sdl_media STATIC
   src/msquic_transport.cpp
   src/decoder.cpp
   src/renderer.cpp
   src/video_pipeline.cpp)
-target_include_directories(loom-sdl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(loom_sdl_media PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_features(loom_sdl_media PUBLIC cxx_std_20)
+target_compile_options(loom_sdl_media PRIVATE -Wall -Wextra)
+target_link_libraries(loom_sdl_media PUBLIC loom_core msquic PkgConfig::SDL2 PkgConfig::SDL2_TTF
+                                            PkgConfig::FFMPEG)
+
+add_executable(loom-sdl src/main.cpp)
 target_compile_features(loom-sdl PRIVATE cxx_std_20)
 target_compile_options(loom-sdl PRIVATE -Wall -Wextra)
-target_link_libraries(loom-sdl PRIVATE loom_core msquic PkgConfig::SDL2 PkgConfig::FFMPEG)
+target_link_libraries(loom-sdl PRIVATE loom_sdl_media)
+
+# Latency-accuracy test (M1.3 accept) — needs the decoder, so it lives with the
+# sdl target (off check.sh), run via the `sdl` preset's ctest.
+if(LOOM_BUILD_TESTS)
+  add_executable(sdl_tests tests/latency_test.cpp)
+  target_link_libraries(sdl_tests PRIVATE loom_sdl_media doctest::doctest)
+  add_test(NAME sdl_tests COMMAND sdl_tests)
+endif()

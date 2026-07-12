@@ -44,6 +44,8 @@ void VideoPipeline::feed_datagram(std::span<const std::uint8_t> datagram) {
   if (h.stream_id != 0) {
     return;  // video only for now (audio is M5)
   }
+  counters_.datagrams += 1;
+  counters_.bytes += datagram.size();
 
   // Stash this fragment's payload for later assembly.
   auto& pending = pending_[h.frame_seq];
@@ -64,6 +66,9 @@ void VideoPipeline::feed_datagram(std::span<const std::uint8_t> datagram) {
       on_idr_(e.last_good);
     }
   }
+  // frames dropped = every reassembler drop category (loss / gap / stale).
+  const auto& c = reasm_.counters();
+  counters_.frames_dropped = c.dropped_incomplete + c.discarded_gap + c.stale_fragments;
   prune(h.frame_seq);
 }
 
@@ -81,11 +86,16 @@ void VideoPipeline::deliver_frame(std::uint32_t frame_seq) {
   if (body.size() <= kCaptureTsLen) {
     return;
   }
-  // Strip the capture_ts prefix (§4.1); the rest is one Annex-B access unit.
+  // Read the capture_ts prefix (§4.1, u64 BE); the rest is one Annex-B AU.
+  std::uint64_t capture_ts = 0;
+  for (std::size_t i = 0; i < kCaptureTsLen; ++i) {
+    capture_ts = (capture_ts << 8) | body[i];
+  }
   std::vector<std::uint8_t> au(body.begin() + kCaptureTsLen, body.end());
+  counters_.frames_received += 1;
   {
     std::lock_guard<std::mutex> lk(mu_);
-    au_queue_.push(std::move(au));
+    au_queue_.push({capture_ts, std::move(au)});
   }
   cv_.notify_one();
 }
@@ -113,18 +123,19 @@ std::shared_ptr<const DecodedFrame> VideoPipeline::take_frame() {
 void VideoPipeline::decode_loop() {
   HevcDecoder decoder;
   while (true) {
-    std::vector<std::uint8_t> au;
+    QueuedAu item;
     {
       std::unique_lock<std::mutex> lk(mu_);
       cv_.wait(lk, [this] { return stop_ || !au_queue_.empty(); });
       if (stop_ && au_queue_.empty()) {
         return;
       }
-      au = std::move(au_queue_.front());
+      item = std::move(au_queue_.front());
       au_queue_.pop();
     }
     DecodedFrame frame;
-    if (decoder.decode(au, frame)) {
+    if (decoder.decode(item.data, frame)) {
+      frame.capture_ts = item.capture_ts;
       auto shared = std::make_shared<const DecodedFrame>(std::move(frame));
       {
         std::lock_guard<std::mutex> lk(mu_);

@@ -1,8 +1,34 @@
 #include "renderer.hpp"
 
+#include <cstdlib>
+
 #include <SDL.h>
+#include <SDL_ttf.h>
 
 namespace loom::sdl {
+namespace {
+
+// Try a few monospace system fonts (macOS dev box) unless LOOM_OVERLAY_FONT is
+// set. Returns nullptr if none load — the overlay is then simply skipped.
+TTF_Font* open_overlay_font() {
+  const char* env = std::getenv("LOOM_OVERLAY_FONT");
+  const char* candidates[] = {
+      env,
+      "/System/Library/Fonts/Menlo.ttc",
+      "/System/Library/Fonts/Monaco.ttf",
+      "/System/Library/Fonts/SFNSMono.ttf",
+      "/System/Library/Fonts/Courier.ttc",
+  };
+  for (const char* path : candidates) {
+    if (path == nullptr) continue;
+    if (TTF_Font* f = TTF_OpenFont(path, 16)) {
+      return f;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 Renderer::Renderer(const std::string& title, int width, int height) {
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -17,9 +43,14 @@ Renderer::Renderer(const std::string& title, int width, int height) {
   if (renderer_ == nullptr) {
     renderer_ = SDL_CreateRenderer(window_, -1, 0);  // fall back to software
   }
+  if (TTF_Init() == 0) {
+    font_ = open_overlay_font();  // nullptr → overlay silently disabled
+  }
 }
 
 Renderer::~Renderer() {
+  if (font_ != nullptr) TTF_CloseFont(font_);
+  if (TTF_WasInit()) TTF_Quit();
   if (texture_ != nullptr) SDL_DestroyTexture(texture_);
   if (renderer_ != nullptr) SDL_DestroyRenderer(renderer_);
   if (window_ != nullptr) SDL_DestroyWindow(window_);
@@ -39,7 +70,7 @@ void Renderer::ensure_texture(int width, int height) {
   tex_h_ = height;
 }
 
-void Renderer::present(const DecodedFrame& frame) {
+void Renderer::present(const DecodedFrame& frame, const std::vector<std::string>& overlay) {
   if (renderer_ == nullptr || frame.width == 0) {
     return;
   }
@@ -48,7 +79,30 @@ void Renderer::present(const DecodedFrame& frame) {
                        frame.width / 2, frame.v.data(), frame.width / 2);
   SDL_RenderClear(renderer_);
   SDL_RenderCopy(renderer_, texture_, nullptr, nullptr);
+  draw_overlay(overlay);
   SDL_RenderPresent(renderer_);
+}
+
+void Renderer::draw_overlay(const std::vector<std::string>& lines) {
+  if (font_ == nullptr || lines.empty()) {
+    return;
+  }
+  const SDL_Color fg = {0, 255, 0, 255};  // ugly debug green (keep it dumb)
+  int y = 6;
+  for (const auto& line : lines) {
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(font_, line.c_str(), fg);
+    if (surf == nullptr) continue;
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer_, surf);
+    SDL_Rect bg = {4, y - 2, surf->w + 8, surf->h + 4};
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 160);
+    SDL_RenderFillRect(renderer_, &bg);
+    SDL_Rect dst = {8, y, surf->w, surf->h};
+    SDL_RenderCopy(renderer_, tex, nullptr, &dst);
+    y += surf->h + 2;
+    SDL_DestroyTexture(tex);
+    SDL_FreeSurface(surf);
+  }
 }
 
 bool Renderer::poll_quit() {

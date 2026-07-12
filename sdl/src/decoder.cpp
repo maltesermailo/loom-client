@@ -1,5 +1,7 @@
 #include "decoder.hpp"
 
+#include <chrono>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/pixfmt.h>
@@ -37,6 +39,7 @@ bool HevcDecoder::decode(std::span<const std::uint8_t> au, DecodedFrame& out) {
   if (ctx_ == nullptr) {
     return false;
   }
+  const auto t_start = std::chrono::steady_clock::now();
   pkt_->data = const_cast<std::uint8_t*>(au.data());
   pkt_->size = static_cast<int>(au.size());
   if (avcodec_send_packet(ctx_, pkt_) < 0) {
@@ -45,6 +48,10 @@ bool HevcDecoder::decode(std::span<const std::uint8_t> au, DecodedFrame& out) {
   if (avcodec_receive_frame(ctx_, frame_) < 0) {
     return false;  // EAGAIN (needs more input) or error
   }
+  out.decode_us = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - t_start)
+          .count());
   if (frame_->format != AV_PIX_FMT_YUV420P) {
     return false;  // §5 mandates 4:2:0 8-bit; anything else is a host bug
   }

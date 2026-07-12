@@ -22,6 +22,8 @@ struct DecodedFrame {
   std::vector<std::uint8_t> y;
   std::vector<std::uint8_t> u;
   std::vector<std::uint8_t> v;
+  std::uint64_t capture_ts = 0;  // host-clock µs (§4.1), set by the pipeline
+  std::uint64_t decode_us = 0;   // decode duration, set by the decoder
 };
 
 class HevcDecoder {
