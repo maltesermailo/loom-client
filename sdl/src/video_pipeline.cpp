@@ -7,6 +7,15 @@
 
 namespace loom::sdl {
 
+// §3.6: the client MUST NOT send more than one IDR_REQUEST per 250 ms.
+constexpr std::int64_t kIdrMinIntervalMs = 250;
+// Access units the decoder may have in hand before we call the oldest stale.
+// Two, matching the "at most 2 frames in flight" the receive model works in
+// (ARCHITECTURE §4.2, PROTOCOL §6.2): one in flight plus one waiting absorbs a
+// single slow decode without dropping, while still bounding the hand-off. A cap
+// of one measured 4.9% loss at 720p72 purely from transient hiccups.
+constexpr std::size_t kMaxPendingAus = 2;
+
 namespace reassembly = loom::proto::reassembly;
 
 // Frame body prefix carrying the host capture timestamp (§4.1).
@@ -60,18 +69,20 @@ void VideoPipeline::feed_datagram(std::span<const std::uint8_t> datagram) {
   for (; seen_events_ < events.size(); ++seen_events_) {
     const auto& e = events[seen_events_];
     if (e.kind == reassembly::Event::Kind::Deliver) {
-      deliver_frame(e.frame_seq);
-    } else if (e.kind == reassembly::Event::Kind::IdrRequest && on_idr_) {
-      on_idr_(e.last_good);
+      deliver_frame(e.frame_seq, e.keyframe);
+    } else if (e.kind == reassembly::Event::Kind::IdrRequest) {
+      request_idr(e.last_good);
     }
   }
-  // frames dropped = every reassembler drop category (loss / gap / stale).
+  // frames dropped = every reassembler drop category (loss / gap / stale), plus
+  // the frames we dropped at the decoder input for being stale on arrival.
   const auto& c = reasm_.counters();
-  counters_.frames_dropped = c.dropped_incomplete + c.discarded_gap + c.stale_fragments;
+  counters_.frames_dropped =
+      c.dropped_incomplete + c.discarded_gap + c.stale_fragments + stale_at_decoder_;
   prune(h.frame_seq);
 }
 
-void VideoPipeline::deliver_frame(std::uint32_t frame_seq) {
+void VideoPipeline::deliver_frame(std::uint32_t frame_seq, bool keyframe) {
   auto it = pending_.find(frame_seq);
   if (it == pending_.end() || it->second.parts.size() != it->second.count) {
     return;  // shouldn't happen: reassembler only delivers complete frames
@@ -91,12 +102,58 @@ void VideoPipeline::deliver_frame(std::uint32_t frame_seq) {
     capture_ts = (capture_ts << 8) | body[i];
   }
   std::vector<std::uint8_t> au(body.begin() + kCaptureTsLen, body.end());
+
+  // Anything still waiting on the decoder is stale the moment a newer frame is
+  // ready: drop it instead of letting the hand-off grow into a latency store.
+  bool chain_broken = false;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (au_queue_.size() >= kMaxPendingAus) {
+      stale_at_decoder_ += au_queue_.size();
+      std::queue<QueuedAu>().swap(au_queue_);
+      chain_broken = true;
+    }
+  }
+  if (chain_broken) {
+    awaiting_keyframe_ = true;
+  }
+
+  // A frame whose reference we just dropped decodes to garbage, so it waits for
+  // the IDR instead (§5.3 — every non-IDR frame references its predecessor).
+  if (awaiting_keyframe_ && !keyframe) {
+    stale_at_decoder_ += 1;
+    request_idr(last_good_seq_);
+    return;
+  }
+  awaiting_keyframe_ = false;
+  if (keyframe) {
+    idr_outstanding_ = false;
+  }
+  last_good_seq_ = frame_seq;
+
   counters_.frames_received += 1;
   {
     std::lock_guard<std::mutex> lk(mu_);
     au_queue_.push({capture_ts, std::move(au)});
   }
   cv_.notify_one();
+}
+
+// Every IDR request the client sends passes through here, so §3.6's "MUST NOT
+// send more than one per 250 ms" holds across both sources — the reassembler
+// enforces it only for the requests it raises itself.
+void VideoPipeline::request_idr(std::uint32_t last_good) {
+  if (!on_idr_ || idr_outstanding_) {
+    return;  // §3.6 SHOULD: suppress while one is outstanding
+  }
+  const std::int64_t now = now_ms();
+  if (last_idr_request_ms_ >= 0 && now - last_idr_request_ms_ < kIdrMinIntervalMs) {
+    return;
+  }
+
+  last_idr_request_ms_ = now;
+  idr_outstanding_ = true;
+  on_idr_(last_good);
 }
 
 void VideoPipeline::prune(std::uint32_t newest) {
