@@ -1,9 +1,10 @@
 # loom-client — Code Navigation Map
 
 Developer aid (informative), not a contract. Covers every `.hpp`/`.cpp` in `loom-client`
-(`proto/`, `core/`, `sdl/`, `tests/`; excludes `spec/` and `build/`). Points at the normative
-spec: **PROTOCOL.md**, **ARCHITECTURE.md**, **PAIRING.md**, **VECTORS.md** — the spec wins on any
-disagreement. `proto/` here is the C++ twin of the Rust `loom-proto` (`loom-host/CODE_MAP.md`).
+(`proto/`, `core/`, `sdl/`, `quest/`, `tests/`; excludes `spec/` and `build/`). Points at the
+normative spec: **PROTOCOL.md**, **ARCHITECTURE.md**, **PAIRING.md**, **VECTORS.md** — the spec
+wins on any disagreement. `proto/` here is the C++ twin of the Rust `loom-proto`
+(`loom-host/CODE_MAP.md`).
 
 **Reading the tables:** file names link to the file; `symbols` are the key items to jump to; the
 **§** column lists the spec sections a file implements. Public API is in `*.hpp`; the paired
@@ -32,9 +33,13 @@ disagreement. `proto/` here is the C++ twin of the Rust `loom-proto` (`loom-host
                     │  Session: on_control_bytes/on_event → poll()  │
                     └───────────────▲──────────────────────────────┘
                                     │ ITransport seam (bytes + events)
-        ┌───────────────────────────┴───────────────┐   Quest (M3) reuses core/ +
-   QUIC │ sdl/  loom-sdl  (transport + decode + show) │   proto/ behind its own
-  <────>│  msquic · video_pipeline · decoder · render │   ITransport — not here yet
+        ┌───────────────────────────┴────────────────┐
+   QUIC │ sdl/  loom-sdl  (transport + decode + show) │
+  <────>│  msquic · video_pipeline · decoder · render │
+        └────────────────────────────────────────────┘
+        ┌────────────────────────────────────────────┐  quest/ does not touch
+        │ quest/  loom-quest  (OpenXR · GLES3 · NDK) │  proto/ or core/ yet —
+        │  xr_app · egl_context · gl_scene           │  it wires them in M3.3
         └────────────────────────────────────────────┘
 ```
 
@@ -134,6 +139,36 @@ msquic callbacks run on worker threads and only push onto a mutex-guarded queue,
 
 ---
 
+## `quest/` — Quest 3 client (`loom-quest`)
+
+The NDK/OpenXR app. **Built by Gradle, not by a CMake preset** — the OpenXR loader ships only as a
+Maven AAR consumed via AGP prefab, so Gradle owns the dependency graph and drives
+`quest/CMakeLists.txt` through `externalNativeBuild`. `check.sh` format-checks `quest/src` but does
+not build it. Build/deploy commands and the pinned toolchain: [`quest/README.md`](quest/README.md).
+
+As of M3.1 this is presentation only: no transport, no decode, and **no dependency on `proto/` or
+`core/`** — those arrive with the session in M3.3.
+
+| File | What it is | Key symbols | § |
+|---|---|---|---|
+| [`AndroidManifest.xml`](quest/AndroidManifest.xml) | NativeActivity + `com.oculus.intent.category.VR` + WiFi permissions | — | — |
+| [`LoomActivity.kt`](quest/kotlin/com/loom/quest/LoomActivity.kt) | **The entire JVM surface**: holds `WIFI_MODE_FULL_LOW_LATENCY` (no NDK equivalent) | `LoomActivity` | ARCH 6.1 |
+| [`main.cpp`](quest/src/main.cpp) | `android_main`; Android lifecycle + the frame loop | `android_main`, `on_app_cmd` | — |
+| [`xr_app.hpp`](quest/src/xr_app.hpp) · [`.cpp`](quest/src/xr_app.cpp) | OpenXR instance/session/spaces/swapchains; submits the two layers | `XrApp::{create,poll_events,render_frame}` | ARCH 6.2 |
+| [`egl_context.hpp`](quest/src/egl_context.hpp) · [`.cpp`](quest/src/egl_context.cpp) | EGL context; no window surface (the compositor owns the display) | `EglContext::create` | — |
+| [`gl_scene.hpp`](quest/src/gl_scene.hpp) · [`.cpp`](quest/src/gl_scene.cpp) | Floor grid + generated test texture | `FloorGrid`, `create_test_texture`, `Mat4` | — |
+| [`log.hpp`](quest/src/log.hpp) | `loom` logcat tag | `LOOM_LOGI`, `LOOM_LOGE` | — |
+
+**Notes**
+- The desktop is *not* drawn into the eye buffers (ARCHITECTURE §6.2). The projection layer holds
+  only the floor grid; the cylinder layer's swapchain is what video lands in from M3.2.
+- The cylinder is posed in **LOCAL** space, so a runtime recenter re-origins the space and the
+  screen follows the user with no code of ours involved.
+- `main.cpp`'s looper timeout must not block while resumed: OpenXR session-state events arrive via
+  `xrPollEvent`, not the Android looper, so blocking there stalls the session before it starts.
+
+---
+
 ## `tests/` — doctest unit tests (single `proto_tests` binary)
 
 Linked against `loom_core` (which brings `loom_proto`). `smoke_test.cpp` carries the doctest `main`.
@@ -162,5 +197,6 @@ Linked against `loom_core` (which brings `loom_proto`). `smoke_test.cpp` carries
 | Trace the display path | datagram → [`video_pipeline.cpp`](sdl/src/video_pipeline.cpp) → [`decoder.cpp`](sdl/src/decoder.cpp) → [`renderer.cpp`](sdl/src/renderer.cpp) |
 | Understand clock sync / stats | [`session.hpp`](core/include/loom/core/session.hpp) (`on_tick`/`clock`) → [`metrics.hpp`](sdl/src/metrics.hpp) → overlay in [`main.cpp`](sdl/src/main.cpp) |
 | Trace loss recovery | [`reassembly.hpp`](proto/include/loom/proto/reassembly.hpp) invariants + rules 1–3 |
-| Reuse on Quest (M3) | Implement `ITransport` with msquic-on-Android; `core/` + `proto/` unchanged |
+| Reuse on Quest (M3.3) | Implement `ITransport` with msquic-on-Android; `core/` + `proto/` unchanged |
+| Build/run the Quest app | [`quest/README.md`](quest/README.md) — Gradle + wireless adb, JDK 21 |
 | Run the suites | `./check.sh` (build + `ctest` + `vector-adapter`); SDL builds via the `sdl` preset |

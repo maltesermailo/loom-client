@@ -2,3 +2,8 @@
 /build-*/
 .cache/
 compile_commands.json
+# Quest (Gradle/AGP)
+quest/build/
+quest/.cxx/
+quest/.gradle/
+quest/local.properties

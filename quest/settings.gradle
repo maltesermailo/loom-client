@@ -1,0 +1,20 @@
+// Standalone Gradle build for the Quest client. It is deliberately not part of
+// the CMake presets: the OpenXR loader ships only as a Maven AAR consumed via
+// AGP's prefab, so Gradle — not CMake — has to own the dependency graph. Gradle
+// then drives our CMakeLists.txt through externalNativeBuild.
+
+pluginManagement {
+  repositories {
+    google()
+    mavenCentral()
+  }
+}
+
+dependencyResolutionManagement {
+  repositories {
+    google()
+    mavenCentral()
+  }
+}
+
+rootProject.name = 'loom-quest'

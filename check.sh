@@ -7,8 +7,10 @@
 #
 # The conformance harness and the vectors both come from the pinned spec
 # submodule, so this script is self-contained within the client repo. The SDL
-# and Quest targets need their SDKs (msquic/SDL2, NDK) and are built separately;
-# this gate stays hermetic and toolchain-light so it runs anywhere.
+# and Quest targets need their SDKs (msquic/SDL2, NDK/Gradle) and are built
+# separately — quest/ is format-checked here but built by Gradle (see
+# quest/README.md); this gate stays hermetic and toolchain-light so it runs
+# anywhere.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,7 +20,7 @@ clang_format="$(command -v clang-format || true)"
 [ -n "$clang_format" ] || clang_format="$(xcrun --find clang-format 2>/dev/null || true)"
 if [ -n "$clang_format" ]; then
   # The generated fixture is one machine-emitted line; clang-format would reflow it.
-  find proto core sdl tests -type f \( -name '*.hpp' -o -name '*.cpp' \) \
+  find proto core sdl quest/src tests -type f \( -name '*.hpp' -o -name '*.cpp' \) \
     ! -name 'idr_fixture.hpp' -print0 |
     xargs -0 "$clang_format" --dry-run --Werror --style=file
 else

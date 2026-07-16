@@ -16,19 +16,11 @@
       "inherits": "host-tools",
       "binaryDir": "${sourceDir}/build/sdl",
       "cacheVariables": { "LOOM_BUILD_SDL": "ON" }
-    },
-    {
-      "name": "quest",
-      "displayName": "quest (placeholder)",
-      "description": "Quest NDK/OpenXR client — Android toolchain wired in a later session.",
-      "inherits": "host-tools",
-      "binaryDir": "${sourceDir}/build/quest"
     }
   ],
   "buildPresets": [
     { "name": "host-tools", "configurePreset": "host-tools" },
-    { "name": "sdl", "configurePreset": "sdl" },
-    { "name": "quest", "configurePreset": "quest" }
+    { "name": "sdl", "configurePreset": "sdl" }
   ],
   "testPresets": [
     {
