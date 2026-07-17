@@ -126,6 +126,7 @@ void HevcDecoder::decode_loop() {
       if (it != queued_ns.end()) {
         const float latency_ms = (monotonic_ns() - it->second) / 1.0e6f;
         queued_ns.erase(it);
+        metrics_.latest_ms = latency_ms;
         if (metrics_.latencies_ms.size() < kMetricsSample) {
           metrics_.latencies_ms.push_back(latency_ms);
           if (metrics_.latencies_ms.size() == kMetricsSample) log_decode_summary(metrics_);

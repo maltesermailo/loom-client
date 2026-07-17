@@ -30,6 +30,7 @@ namespace loom::quest {
 // reviews/M3.2-mediacodec-r5.md; kept live for the overlay and smoothness work.
 struct DecodeMetrics {
   std::vector<float> latencies_ms;
+  float latest_ms = 0.0f;  // most recent decode latency, for the live overlay
   int max_in_flight = 0;
   bool low_latency_requested = false;
 };

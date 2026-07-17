@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -236,6 +237,8 @@ bool XrApp::create(android_app* app) {
     LOOM_LOGE("SurfaceTexture setup failed — video unavailable");
   }
 
+  overlay_.create(session_);
+
   connect_from_config(app);
   request_refresh_rate(kTargetRefreshHz);
 
@@ -296,16 +299,29 @@ void XrApp::pump_network() {
   if (net_session_->just_started_streaming()) {
     start_decoder();
     last_stats_us_ = now;
+    bitrate_base_us_ = now;
+    bitrate_base_bytes_ = 0;
   }
 
   // STATS every second (§3.7). Frame/loss counts come from the receiver; decode
-  // and rtt/e2e from here.
+  // and rtt/e2e from here. The bitrate estimate (bytes over the window) feeds the
+  // overlay only — it is not a §3.7 field.
   if (decoder_active_ && now - last_stats_us_ >= 1'000'000) {
     const auto c = net_session_->receiver().counters();
+
+    const double secs = static_cast<double>(now - bitrate_base_us_) / 1e6;
+    if (secs > 0.0) {
+      bitrate_kbps_ = static_cast<std::uint64_t>(
+          static_cast<double>(c.bytes - bitrate_base_bytes_) * 8.0 / 1000.0 / secs);
+    }
+    bitrate_base_bytes_ = c.bytes;
+    bitrate_base_us_ = now;
+
     loom::core::StatsInput in;
     in.frames_received = c.frames_received;
     in.frames_dropped = c.frames_dropped;
     in.datagrams = c.datagrams;
+    in.decode_us = static_cast<std::uint64_t>(decoder_.metrics().latest_ms * 1000.0f);
     if (const auto clk = net_session_->clock()) {
       in.rtt_us = static_cast<std::uint64_t>(std::max<std::int64_t>(0, clk->rtt));
     }
@@ -313,6 +329,37 @@ void XrApp::pump_network() {
     net_session_->send_stats(in);
     last_stats_us_ = now;
   }
+}
+
+std::vector<std::string> XrApp::overlay_lines() {
+  char buf[64];
+  std::vector<std::string> lines;
+
+  const auto clk = net_session_ ? net_session_->clock() : std::nullopt;
+  if (clk && have_e2e_) {
+    std::snprintf(buf, sizeof buf, "e2e %llu ms  rtt %llu ms",
+                  static_cast<unsigned long long>(e2e_us_ / 1000),
+                  static_cast<unsigned long long>(std::max<std::int64_t>(0, clk->rtt) / 1000));
+  } else {
+    std::snprintf(buf, sizeof buf, "e2e --  rtt --");
+  }
+  lines.emplace_back(buf);
+
+  double loss_pct = 0.0;
+  if (net_session_) {
+    const auto c = net_session_->receiver().counters();
+    const std::uint64_t total = c.frames_received + c.frames_dropped;
+    if (total > 0) loss_pct = 100.0 * static_cast<double>(c.frames_dropped) / total;
+  }
+  std::snprintf(buf, sizeof buf, "decode %.1f ms  loss %.2f%%",
+                decoder_active_ ? decoder_.metrics().latest_ms : 0.0f, loss_pct);
+  lines.emplace_back(buf);
+
+  std::snprintf(buf, sizeof buf, "bitrate %llu kbps",
+                static_cast<unsigned long long>(bitrate_kbps_));
+  lines.emplace_back(buf);
+
+  return lines;
 }
 
 bool XrApp::create_instance(android_app* app) {
@@ -647,6 +694,7 @@ void XrApp::render_frame() {
   std::vector<XrCompositionLayerProjectionView> projection_views(view_count);
   XrCompositionLayerProjection projection_layer = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
   XrCompositionLayerCylinderKHR cylinder_layer = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+  XrCompositionLayerQuad overlay_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
   std::vector<const XrCompositionLayerBaseHeader*> layers;
 
   if (frame_state.shouldRender == XR_TRUE && poses_valid) {
@@ -704,6 +752,12 @@ void XrApp::render_frame() {
     cylinder_layer.centralAngle = kCylinderCentralAngle;
     cylinder_layer.aspectRatio = kCylinderAspect;
     layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder_layer));
+
+    // Debug overlay on top, refreshed every frame so its stats keep ticking even
+    // when the video is frozen.
+    if (overlay_.visible() && overlay_.build_layer(local_space_, overlay_lines(), &overlay_layer)) {
+      layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&overlay_layer));
+    }
   }
 
   XrFrameEndInfo end_info = {XR_TYPE_FRAME_END_INFO};

@@ -146,10 +146,10 @@ Maven AAR consumed via AGP prefab, so Gradle owns the dependency graph and drive
 `quest/CMakeLists.txt` through `externalNativeBuild`. `check.sh` format-checks `quest/src` but does
 not build it. Build/deploy commands and the pinned toolchain: [`quest/README.md`](quest/README.md).
 
-As of M3.2 this decodes a looped local bitstream onto the cylinder, but still has **no dependency
-on `proto/` or `core/`** — the session and transport arrive in M3.3. The decode path's shape (a
-decode thread feeding access units, the render thread latching the newest frame) is what M3.3
-keeps; only the access-unit *source* changes, from the looped file to `core`'s reassembly output.
+As of M3.3 this is a live client: `net_session` pumps the QUIC session (`core::Session` +
+`core::VideoReceiver`) on the render thread, the decode thread pops access units from the receiver
+into AMediaCodec, and the toggleable overlay shows the M1.3 fields. It reuses `proto/` + `core/`
+untouched behind `quic_transport` (its own `ITransport`-shaped seam).
 
 | File | What it is | Key symbols | § |
 |---|---|---|---|
@@ -161,6 +161,9 @@ keeps; only the access-unit *source* changes, from the looped file to `core`'s r
 | [`gl_scene.hpp`](quest/src/gl_scene.hpp) · [`.cpp`](quest/src/gl_scene.cpp) | Floor grid + generated test texture (static fallback) | `FloorGrid`, `create_test_texture`, `Mat4` | — |
 | [`hevc_decoder.hpp`](quest/src/hevc_decoder.hpp) · [`.cpp`](quest/src/hevc_decoder.cpp) | AMediaCodec HEVC decode, surface mode, decode thread + R5 metrics | `HevcDecoder`, `DecodeMetrics` | ARCH 6.1, §5 |
 | [`surface_texture.hpp`](quest/src/surface_texture.hpp) · [`.cpp`](quest/src/surface_texture.cpp) | JNI `SurfaceTexture` → `ASurfaceTexture` → OES texture; new-frame latch | `SurfaceTexture::{create,update,window}` | ARCH 6.2 |
+| [`quic_transport.hpp`](quest/src/quic_transport.hpp) · [`.cpp`](quest/src/quic_transport.cpp) | msquic-on-Android transport (quest-local mirror of the SDL one) | `QuicTransport`, `TransportEvent` | 1, 2, 4 |
+| [`net_session.hpp`](quest/src/net_session.hpp) · [`.cpp`](quest/src/net_session.cpp) | Transport + `core::Session` + `core::VideoReceiver` pump (the SDL main loop, on the render thread) | `NetSession::{start,pump,receiver}` | 1.1, 3, 7 |
+| [`overlay.hpp`](quest/src/overlay.hpp) · [`.cpp`](quest/src/overlay.cpp) | Debug overlay: M1.3 fields on a quad layer; embedded bitmap font | `Overlay::{create,toggle,build_layer}` | 12 |
 | [`au_splitter.hpp`](quest/src/au_splitter.hpp) · [`.cpp`](quest/src/au_splitter.cpp) | Annex-B → per-frame access units (offline path only) | `split_access_units`, `AccessUnit` | §5.5 |
 | [`log.hpp`](quest/src/log.hpp) | `loom` logcat tag | `LOOM_LOGI`, `LOOM_LOGE` | — |
 

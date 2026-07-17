@@ -2,8 +2,9 @@
 // OpenXR lifecycle and the frame loop.
 //
 // Structure follows the Meta XrCompositor_NativeActivity sample, trimmed to what
-// Loom needs: two layers (a projection layer holding the floor grid, and the
-// cylinder holding the desktop), no cube/equirect/quad demos, no foveation.
+// Loom needs: a projection layer holding the floor grid, the cylinder holding
+// the desktop, and (when toggled) the debug-overlay quad. No cube/equirect
+// demos, no foveation.
 
 // openxr_platform.h's Android structs are declared in terms of JNI and EGL
 // types, so both must be included ahead of it.
@@ -18,12 +19,14 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "egl_context.hpp"
 #include "gl_scene.hpp"
 #include "hevc_decoder.hpp"
 #include "net_session.hpp"
+#include "overlay.hpp"
 #include "surface_texture.hpp"
 
 struct android_app;
@@ -70,7 +73,12 @@ class XrApp {
 
   bool session_running() const { return session_running_; }
 
+  // Toggles the in-headset debug overlay (wired to the headset volume key).
+  void toggle_overlay() { overlay_.toggle(); }
+
  private:
+  std::vector<std::string> overlay_lines();
+
   bool create_instance(android_app* app);
   bool create_session();
   bool create_swapchains();
@@ -133,6 +141,12 @@ class XrApp {
   // Newest e2e latency (capture→display, µs) for the overlay / STATS (§4.5).
   std::uint64_t e2e_us_ = 0;
   bool have_e2e_ = false;
+
+  // Debug overlay + the bitrate estimate it shows (bytes over a 1 s window).
+  Overlay overlay_;
+  std::uint64_t bitrate_kbps_ = 0;
+  std::uint64_t bitrate_base_bytes_ = 0;
+  std::int64_t bitrate_base_us_ = 0;
 };
 
 }  // namespace loom::quest

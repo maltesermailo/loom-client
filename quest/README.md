@@ -1,9 +1,16 @@
 # loom-quest — Quest 3 client
 
-The NDK/OpenXR app. As of M3.2 it brings up an OpenXR session, decodes a looped
-local HEVC bitstream with AMediaCodec (surface mode) onto the cylinder layer, and
-falls back to a static test image when no bitstream is present. Transport and the
-live session arrive in M3.3 (`spec/ROADMAP.md`).
+The NDK/OpenXR app. As of M3.3 it is a live client: msquic connects to `loomd`,
+the shared `core/` session + reassembly drive an AMediaCodec surface decode onto
+the cylinder, and a toggleable debug overlay shows the M1.3 fields. It falls back
+to a static test image when no host is configured.
+
+**Host config:** put `host` or `host:port` in `loom_host.txt` in the app's
+external files dir (`/sdcard/Android/data/com.loom.quest/files/`, adb-pushable);
+absent → static image. msquic must be built first (see below).
+
+**Overlay toggle:** the headset **volume-up** key toggles the debug overlay
+(e2e / rtt / decode / loss / bitrate). Controller input is M4.
 
 ## Why this is a Gradle build and not a CMake preset
 

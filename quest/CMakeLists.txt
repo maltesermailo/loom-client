@@ -43,6 +43,7 @@ add_library(loom_quest SHARED
   src/hevc_decoder.cpp
   src/main.cpp
   src/net_session.cpp
+  src/overlay.cpp
   src/quic_transport.cpp
   src/surface_texture.cpp
   src/xr_app.cpp)
