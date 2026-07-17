@@ -7,3 +7,5 @@ quest/build/
 quest/.cxx/
 quest/.gradle/
 quest/local.properties
+quest/third_party/msquic/
+quest/third_party/msquic-build/

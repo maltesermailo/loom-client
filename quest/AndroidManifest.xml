@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+  <!-- The QUIC transport opens UDP sockets to the host; a sandboxed app needs
+       INTERNET to do so at all (the M3.0 smoke test ran as shell and did not). -->
+  <uses-permission android:name="android.permission.INTERNET" />
+
   <!-- WifiLock.acquire() needs WAKE_LOCK; the FULL_LOW_LATENCY mode also reads
        WiFi state. See LoomActivity.kt for why the lock is not optional. -->
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />

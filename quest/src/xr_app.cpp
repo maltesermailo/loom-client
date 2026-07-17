@@ -3,16 +3,26 @@
 #include <GLES2/gl2ext.h>  // GL_TEXTURE_EXTERNAL_OES
 #include <android_native_app_glue.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <fstream>
+#include <optional>
+#include <string>
 #include <vector>
 
-#include "au_splitter.hpp"
 #include "log.hpp"
 
 namespace loom::quest {
 namespace {
+
+// Client monotonic clock in microseconds (§7 uses it for CLOCK_PING t0/PONG t3).
+std::int64_t now_us() {
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<std::int64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+}
 
 // Stream geometry from ARCHITECTURE §2; the cylinder swapchain is sized to the
 // video it will carry from M3.2 on, so the layer does not change shape later.
@@ -220,41 +230,89 @@ bool XrApp::create(android_app* app) {
   if (blit_program_ == 0 || oes_blit_program_ == 0) return false;
   glGenVertexArrays(1, &blit_vao_);
 
-  start_decoder(app);
+  // The SurfaceTexture must be created on the render thread with GL current
+  // (here); the decoder attaches to its window later, when streaming begins.
+  if (!surface_texture_.create(app->activity->vm)) {
+    LOOM_LOGE("SurfaceTexture setup failed — video unavailable");
+  }
+
+  connect_from_config(app);
   request_refresh_rate(kTargetRefreshHz);
 
   return true;
 }
 
-void XrApp::start_decoder(android_app* app) {
-  // The looped test bitstream is pushed to the app's external files dir (see
-  // quest/README.md). Absent → stay on the M3.1 static image rather than fail.
-  std::string path = std::string(app->activity->externalDataPath) + "/loom_test.hevc";
-  std::ifstream file(path, std::ios::binary | std::ios::ate);
+void XrApp::connect_from_config(android_app* app) {
+  // Dev config (M7 replaces this with mDNS discovery): host or host:port in
+  // <externalDataPath>/loom_host.txt, adb-pushable without a rebuild. Absent →
+  // no connection, the cylinder stays on the static test image.
+  const std::string path = std::string(app->activity->externalDataPath) + "/loom_host.txt";
+  std::ifstream file(path);
   if (!file) {
-    LOOM_LOGI("no test bitstream at %s — showing static image", path.c_str());
+    LOOM_LOGI("no %s — not connecting (static image)", path.c_str());
     return;
   }
 
-  const std::streamsize size = file.tellg();
-  file.seekg(0);
-  std::vector<std::uint8_t> stream(static_cast<std::size_t>(size));
-  file.read(reinterpret_cast<char*>(stream.data()), size);
+  std::string line;
+  std::getline(file, line);
+  while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' ')) {
+    line.pop_back();
+  }
+  std::string host = line;
+  std::uint16_t port = 47800;
+  if (const auto colon = line.rfind(':'); colon != std::string::npos) {
+    host = line.substr(0, colon);
+    port = static_cast<std::uint16_t>(std::stoi(line.substr(colon + 1)));
+  }
+  if (host.empty()) return;
 
-  std::vector<AccessUnit> access_units = split_access_units(stream);
-  LOOM_LOGI("test bitstream: %lld bytes, %zu access units", static_cast<long long>(size),
-            access_units.size());
-  if (access_units.empty()) return;
-
-  if (!surface_texture_.create(app->activity->vm)) return;
-  if (!decoder_.create(surface_texture_.window(), static_cast<int>(kCylinderWidth),
-                       static_cast<int>(kCylinderHeight), std::move(access_units))) {
+  loom::core::HelloParams params;
+  params.client_name = "loom-quest";
+  net_session_.emplace(params);
+  if (!net_session_->start(host, port)) {
+    LOOM_LOGE("failed to start QUIC connection to %s:%u", host.c_str(), port);
+    net_session_.reset();
     return;
   }
+  LOOM_LOGI("connecting to %s:%u", host.c_str(), port);
+}
 
-  decoder_.start();
+void XrApp::start_decoder() {
+  if (!decoder_.create(surface_texture_.window(), static_cast<int>(cylinder_width_),
+                       static_cast<int>(cylinder_height_))) {
+    return;
+  }
+  decoder_.start(&net_session_->receiver());
   decoder_active_ = true;
-  LOOM_LOGI("decoder started (low-latency requested)");
+  LOOM_LOGI("decoder started (streaming)");
+}
+
+void XrApp::pump_network() {
+  if (!net_session_) return;
+
+  const std::int64_t now = now_us();
+  net_session_->pump(now);
+
+  if (net_session_->just_started_streaming()) {
+    start_decoder();
+    last_stats_us_ = now;
+  }
+
+  // STATS every second (§3.7). Frame/loss counts come from the receiver; decode
+  // and rtt/e2e from here.
+  if (decoder_active_ && now - last_stats_us_ >= 1'000'000) {
+    const auto c = net_session_->receiver().counters();
+    loom::core::StatsInput in;
+    in.frames_received = c.frames_received;
+    in.frames_dropped = c.frames_dropped;
+    in.datagrams = c.datagrams;
+    if (const auto clk = net_session_->clock()) {
+      in.rtt_us = static_cast<std::uint64_t>(std::max<std::int64_t>(0, clk->rtt));
+    }
+    if (have_e2e_) in.e2e_us = e2e_us_;
+    net_session_->send_stats(in);
+    last_stats_us_ = now;
+  }
 }
 
 bool XrApp::create_instance(android_app* app) {
@@ -598,7 +656,19 @@ void XrApp::render_frame() {
     // The static fallback (no decoder) is painted once.
     if (decoder_active_) {
       float transform[16];
-      if (surface_texture_.update(transform)) paint_cylinder_from_decoder(transform);
+      std::int64_t ts_ns = 0;
+      if (surface_texture_.update(transform, &ts_ns)) {
+        paint_cylinder_from_decoder(transform);
+
+        // The frame timestamp is the host capture_ts (µs) the decoder passed
+        // through, ×1000. e2e = now − (capture_ts − offset) (§4.5, §7).
+        if (const auto clk = net_session_ ? net_session_->clock() : std::nullopt) {
+          const std::int64_t capture_ts = ts_ns / 1000;
+          const std::int64_t e2e = now_us() - (capture_ts - clk->offset);
+          e2e_us_ = static_cast<std::uint64_t>(std::max<std::int64_t>(0, e2e));
+          have_e2e_ = true;
+        }
+      }
     } else if (!cylinder_painted_) {
       paint_cylinder_test_image();
     }

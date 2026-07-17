@@ -29,6 +29,9 @@ android {
     main {
       manifest.srcFile 'AndroidManifest.xml'
       kotlin.srcDirs = ['kotlin']
+      // Prebuilt libmsquic.so (built by scripts/build-msquic-android.sh) — AGP
+      // packages it into the APK; CMake links it as the IMPORTED msquic target.
+      jniLibs.srcDirs = ['third_party/msquic/lib']
     }
   }
 

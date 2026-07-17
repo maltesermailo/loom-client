@@ -67,6 +67,7 @@ void android_main(android_app* app) {
     }
 
     xr.poll_events(&exit_requested);
+    xr.pump_network();  // drive the QUIC session every iteration, render or not
     xr.render_frame();
   }
 

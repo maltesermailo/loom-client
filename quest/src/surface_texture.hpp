@@ -34,9 +34,12 @@ class SurfaceTexture {
 
   GLuint texture() const { return texture_; }
 
-  // Latches the most recently decoded frame into the OES texture and returns its
-  // 4x4 UV transform. Render thread only. Returns false if no frame was pending.
-  bool update(float transform[16]);
+  // Latches the most recently decoded frame into the OES texture. Render thread
+  // only. Returns false if no new frame was pending. On true, `transform` is the
+  // 4x4 UV transform and `timestamp_ns` is the frame's presentation timestamp —
+  // the decoder set it to the host capture_ts (µs) so it comes back as capture_ts
+  // × 1000, feeding the e2e latency overlay (§4.5).
+  bool update(float transform[16], int64_t* timestamp_ns);
 
  private:
   GLuint texture_ = 0;

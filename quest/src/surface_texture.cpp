@@ -68,7 +68,7 @@ bool SurfaceTexture::create(JavaVM* vm) {
   return true;
 }
 
-bool SurfaceTexture::update(float transform[16]) {
+bool SurfaceTexture::update(float transform[16], int64_t* timestamp_ns) {
   // updateTexImage always latches the newest available buffer (or keeps the
   // current one when none arrived); the timestamp only advances on a genuinely
   // new frame, which is how we know whether to re-blit — the compositor keeps
@@ -78,6 +78,7 @@ bool SurfaceTexture::update(float transform[16]) {
   const int64_t after = ASurfaceTexture_getTimestamp(ast_);
 
   ASurfaceTexture_getTransformMatrix(ast_, transform);
+  *timestamp_ns = after;
 
   return after != before;
 }

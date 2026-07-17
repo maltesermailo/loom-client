@@ -16,11 +16,14 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "egl_context.hpp"
 #include "gl_scene.hpp"
 #include "hevc_decoder.hpp"
+#include "net_session.hpp"
 #include "surface_texture.hpp"
 
 struct android_app;
@@ -57,6 +60,11 @@ class XrApp {
   // Returns false once the runtime wants the app gone.
   bool poll_events(bool* exit_requested);
 
+  // Drives the QUIC session/transport once per loop iteration, independent of
+  // the OpenXR render state so the handshake progresses before rendering starts.
+  // Brings the decoder up when streaming begins; sends STATS once per second.
+  void pump_network();
+
   // Renders and submits one frame. No-op unless the session is running.
   void render_frame();
 
@@ -71,9 +79,11 @@ class XrApp {
   void handle_session_state(XrSessionState state, bool* exit_requested);
   void render_eye(const XrView& view, EyeSwapchain& eye);
 
-  // M3.2 decode path: load the looped test bitstream and start the decoder.
-  // Falls back to the static test image if the file is absent (M3.1 behavior).
-  void start_decoder(android_app* app);
+  // Reads host:port from the app's external files dir (loom_host.txt) and
+  // connects; leaves the app on the static image if none is configured.
+  void connect_from_config(android_app* app);
+  // Brings up the decoder against the live receiver once streaming begins.
+  void start_decoder();
 
   // Blits the current cylinder source into the layer's next swapchain image. The
   // static-image path paints once; the video path repaints only on a new frame.
@@ -109,11 +119,20 @@ class XrApp {
   GLuint oes_blit_program_ = 0;  // samples the decoder's OES external texture
   GLuint blit_vao_ = 0;
 
-  // Video path (M3.2). When decoder_active_ is false the cylinder shows the
-  // static test image (M3.1 fallback, e.g. the bitstream file is missing).
+  // Video path. Until streaming begins (or if no host is configured) the cylinder
+  // shows the static test image; then the decoder feeds it from the live stream.
   bool decoder_active_ = false;
   SurfaceTexture surface_texture_;
   HevcDecoder decoder_;
+
+  // The transport + session pump. optional because it is non-movable and built
+  // in create() once HELLO params are known. Absent when no host is configured.
+  std::optional<NetSession> net_session_;
+  std::int64_t last_stats_us_ = 0;
+
+  // Newest e2e latency (capture→display, µs) for the overlay / STATS (§4.5).
+  std::uint64_t e2e_us_ = 0;
+  bool have_e2e_ = false;
 };
 
 }  // namespace loom::quest
