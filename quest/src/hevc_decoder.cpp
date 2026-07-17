@@ -22,6 +22,14 @@ constexpr int64_t kDequeueTimeoutUs = 2000;
 // Gather this many samples before emitting the decode-latency summary once.
 constexpr std::size_t kMetricsSample = 1000;
 
+// Cap on frames queued to the codec but not yet output. Freshness over
+// completeness (§6.2/§5.6): bursty WiFi arrival would otherwise let the decode
+// thread stuff several frames into the codec at once, and each extra frame is a
+// frame-time of pure latency. Holding at ~2 keeps the codec near real-time; when
+// arrival outruns it, frames back up in the receiver instead, whose own cap then
+// drops-stale and requests an IDR.
+constexpr std::size_t kMaxInFlight = 2;
+
 int64_t monotonic_ns() {
   timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -103,34 +111,15 @@ void HevcDecoder::decode_loop() {
   // input→output latency. Small: only in-flight frames live here.
   std::unordered_map<int64_t, int64_t> queued_ns;
 
-  while (running_) {
-    // --- Feed: block for the next access unit from the receiver. ---
-    auto au = receiver_->pop_au();
-    if (!au) break;  // receiver stopped
-
-    const ssize_t in_idx = AMediaCodec_dequeueInputBuffer(codec_, kDequeueTimeoutUs);
-    if (in_idx >= 0) {
-      size_t capacity = 0;
-      uint8_t* buffer = AMediaCodec_getInputBuffer(codec_, in_idx, &capacity);
-      if (buffer != nullptr && au->data.size() <= capacity) {
-        std::memcpy(buffer, au->data.data(), au->data.size());
-
-        // Pass capture_ts through as the codec pts: it rides back out on the
-        // SurfaceTexture frame timestamp for the e2e overlay (§4.5).
-        const int64_t pts = static_cast<int64_t>(au->capture_ts);
-        queued_ns[pts] = monotonic_ns();
-        AMediaCodec_queueInputBuffer(codec_, in_idx, 0, au->data.size(), static_cast<uint64_t>(pts),
-                                     0);
-
-        const int in_flight = static_cast<int>(queued_ns.size());
-        if (in_flight > metrics_.max_in_flight) metrics_.max_in_flight = in_flight;
-      }
-    }
-
-    // --- Drain all ready output; render=true sends each to the SurfaceTexture.
+  // Drain ready outputs; render=true sends each to the SurfaceTexture. The first
+  // dequeue blocks up to `first_timeout_us` (so a gated loop waits for a slot
+  // instead of spinning); the rest are non-blocking.
+  const auto drain_outputs = [&](int64_t first_timeout_us) {
+    int64_t timeout = first_timeout_us;
     for (;;) {
       AMediaCodecBufferInfo info;
-      const ssize_t out_idx = AMediaCodec_dequeueOutputBuffer(codec_, &info, 0);
+      const ssize_t out_idx = AMediaCodec_dequeueOutputBuffer(codec_, &info, timeout);
+      timeout = 0;
       if (out_idx < 0) break;
 
       const auto it = queued_ns.find(info.presentationTimeUs);
@@ -144,6 +133,40 @@ void HevcDecoder::decode_loop() {
       }
       AMediaCodec_releaseOutputBuffer(codec_, out_idx, true);
     }
+  };
+
+  while (running_) {
+    // Hold the codec at the freshness cap: if it already has kMaxInFlight frames
+    // undecoded, block for one to come out rather than piling on more latency.
+    // Otherwise drain non-blocking, presenting finished frames and freeing input
+    // buffers so the codec does not run ahead of us.
+    const bool gated = queued_ns.size() >= kMaxInFlight;
+    drain_outputs(gated ? kDequeueTimeoutUs : 0);
+    if (gated) continue;
+
+    // Reserve an input buffer BEFORE consuming an access unit. Popping first and
+    // then finding no buffer would strand the access unit — dropping it silently
+    // breaks the reference chain (§5.3) with no IDR request. If the codec has no
+    // free slot yet, loop back to drain and retry instead.
+    const ssize_t in_idx = AMediaCodec_dequeueInputBuffer(codec_, kDequeueTimeoutUs);
+    if (in_idx < 0) continue;
+
+    auto au = receiver_->pop_au();  // blocks for the next frame
+    if (!au) break;                 // receiver stopped
+
+    size_t capacity = 0;
+    uint8_t* buffer = AMediaCodec_getInputBuffer(codec_, in_idx, &capacity);
+    if (buffer == nullptr || au->data.size() > capacity) continue;
+    std::memcpy(buffer, au->data.data(), au->data.size());
+
+    // Pass capture_ts through as the codec pts: it rides back out on the
+    // SurfaceTexture frame timestamp for the e2e overlay (§4.5).
+    const int64_t pts = static_cast<int64_t>(au->capture_ts);
+    queued_ns[pts] = monotonic_ns();
+    AMediaCodec_queueInputBuffer(codec_, in_idx, 0, au->data.size(), static_cast<uint64_t>(pts), 0);
+
+    const int in_flight = static_cast<int>(queued_ns.size());
+    if (in_flight > metrics_.max_in_flight) metrics_.max_in_flight = in_flight;
   }
 }
 
