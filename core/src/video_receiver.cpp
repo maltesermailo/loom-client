@@ -112,9 +112,6 @@ void VideoReceiver::deliver_frame(std::uint32_t frame_seq, bool keyframe, std::i
     return;
   }
   awaiting_keyframe_ = false;
-  if (keyframe) {
-    idr_outstanding_ = false;
-  }
   last_good_seq_ = frame_seq;
 
   counters_.frames_received += 1;
@@ -125,19 +122,17 @@ void VideoReceiver::deliver_frame(std::uint32_t frame_seq, bool keyframe, std::i
   cv_.notify_one();
 }
 
-// Every IDR request the client sends passes through here, so §3.6's "MUST NOT
-// send more than one per 250 ms" holds across both sources — the reassembler
-// enforces it only for the requests it raises itself.
+// Every IDR request the client sends passes through here, so §3.6's "at most one
+// per 250 ms" holds across both sources (reassembler gaps and decoder-overrun
+// drops). The request is re-issued at that cadence while recovery is pending, so
+// a lost recovery IDR does not stall recovery permanently (§3.6).
 void VideoReceiver::request_idr(std::uint32_t last_good, std::int64_t now_ms) {
-  if (!on_idr_ || idr_outstanding_) {
-    return;  // §3.6 SHOULD: suppress while one is outstanding
-  }
+  if (!on_idr_) return;
   if (last_idr_request_ms_ >= 0 && now_ms - last_idr_request_ms_ < kIdrMinIntervalMs) {
     return;
   }
 
   last_idr_request_ms_ = now_ms;
-  idr_outstanding_ = true;
   on_idr_(last_good);
 }
 

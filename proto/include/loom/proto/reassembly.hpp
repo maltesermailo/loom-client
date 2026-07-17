@@ -71,9 +71,7 @@ class Reassembler {
   std::map<std::uint32_t, Incomplete> incomplete_;
   std::vector<Event> events_;
   Counters counters_;
-  bool idr_outstanding_ = false;
-  std::optional<std::int64_t> idr_last_t_;
-  std::optional<std::int64_t> idr_last_good_at_request_;
+  std::optional<std::int64_t> idr_last_t_;  // last IDR request time (§3.6 rate limit)
 };
 
 }  // namespace loom::proto::reassembly

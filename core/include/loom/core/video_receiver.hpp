@@ -15,8 +15,9 @@
 // as decode is slower than arrival. Dropping breaks the reference chain (§5.3),
 // so it forces an IDR request and discards frames until the next keyframe. Every
 // IDR request — from a lost fragment or from a decoder-overrun drop — funnels
-// through one gate so §3.6's "at most one per 250 ms, none while one outstanding"
-// holds for the client as a whole.
+// through one gate that enforces §3.6's "at most one per 250 ms"; the request is
+// re-issued at that cadence while recovery is pending, so a lost recovery IDR
+// does not stall recovery permanently.
 //
 // Threading: feed_datagram() on the producer (transport/render) thread, pop_au()
 // on the decode thread. counters() reads producer-thread state and must be
@@ -90,8 +91,7 @@ class VideoReceiver {
   // Producer-thread only.
   std::uint64_t stale_at_decoder_ = 0;
   bool awaiting_keyframe_ = false;
-  bool idr_outstanding_ = false;
-  std::int64_t last_idr_request_ms_ = -1;
+  std::int64_t last_idr_request_ms_ = -1;  // §3.6 rate limit / retry cadence
   std::uint32_t last_good_seq_ = 0;
 
   // Fragment payloads awaiting assembly, keyed by frame_seq.

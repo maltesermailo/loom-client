@@ -62,23 +62,17 @@ void Reassembler::push(std::int64_t t_ms, const Fragment& frag) {
 void Reassembler::deliver(std::int64_t t_ms, std::uint32_t seq, bool keyframe) {
   events_.push_back(Event{Event::Kind::Deliver, t_ms, seq, keyframe, 0});
   last_decoded_ = static_cast<std::int64_t>(seq);
-  // An outstanding IDR clears once we deliver a keyframe newer than the
-  // last-good frame recorded when the request was raised (§3.6).
-  if (keyframe && idr_outstanding_) {
-    if (!idr_last_good_at_request_ || static_cast<std::int64_t>(seq) > *idr_last_good_at_request_)
-      idr_outstanding_ = false;
-  }
 }
 
 void Reassembler::maybe_idr(std::int64_t t_ms) {
-  if (idr_outstanding_) return;
-  if (idr_last_t_ && t_ms - *idr_last_t_ < 250) return;  // rate limit: >= 250 ms apart
+  // §3.6: at most one request per 250 ms. The request is re-issued at that
+  // cadence while the client still cannot decode (each gap-discard calls this),
+  // so a lost recovery IDR does not stall recovery permanently.
+  if (idr_last_t_ && t_ms - *idr_last_t_ < 250) return;
   const std::int64_t last_good = last_decoded_.value_or(0);
   events_.push_back(
       Event{Event::Kind::IdrRequest, t_ms, 0, false, static_cast<std::uint32_t>(last_good)});
-  idr_outstanding_ = true;
   idr_last_t_ = t_ms;
-  idr_last_good_at_request_ = last_decoded_;
 }
 
 }  // namespace loom::proto::reassembly

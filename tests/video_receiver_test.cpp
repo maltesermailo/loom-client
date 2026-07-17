@@ -80,15 +80,17 @@ TEST_CASE("recovers after a gap: the keyframe is delivered and streaming resumes
   CHECK(idr_count == 1);
 }
 
-TEST_CASE("IDR requests are suppressed while one is outstanding (§3.6)") {
+TEST_CASE("IDR requests are rate-limited to 250 ms but retried while frozen (§3.6)") {
   int idr_count = 0;
   VideoReceiver rx([&](std::uint32_t) { ++idr_count; });
 
   rx.feed_datagram(video_datagram(0, true, 0, {0x01}), 0);
   rx.feed_datagram(video_datagram(2, false, 0, {0x02}), 14);   // gap → IDR #1
-  rx.feed_datagram(video_datagram(4, false, 0, {0x03}), 400);  // another gap, >250 ms later
+  rx.feed_datagram(video_datagram(3, false, 0, {0x03}), 100);  // still frozen, <250 ms → suppressed
+  rx.feed_datagram(video_datagram(4, false, 0, {0x04}),
+                   400);  // still frozen, >250 ms → IDR #2 (retry)
 
-  // The second gap is past the rate-limit window but an IDR is still outstanding
-  // (no keyframe has arrived), so it must not produce a second request.
-  CHECK(idr_count == 1);
+  // No recovery keyframe has arrived, so the client re-requests at the 250 ms
+  // cadence rather than deadlocking on a single (possibly lost) IDR.
+  CHECK(idr_count == 2);
 }
