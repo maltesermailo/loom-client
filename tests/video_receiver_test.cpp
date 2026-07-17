@@ -63,6 +63,23 @@ TEST_CASE("a gap discards the frame and fires exactly one IDR request") {
   CHECK(rx.counters().frames_dropped == 1);
 }
 
+TEST_CASE("recovers after a gap: the keyframe is delivered and streaming resumes") {
+  int idr_count = 0;
+  VideoReceiver rx([&](std::uint32_t) { ++idr_count; });
+
+  // Only one frame is in flight before the gap, so the freshness cap does not
+  // fire (the real decode thread pops continuously); this isolates recovery.
+  rx.feed_datagram(video_datagram(0, true, 0, {0x01}), 0);    // keyframe → delivered
+  rx.feed_datagram(video_datagram(2, false, 0, {0x03}), 28);  // gap (1 missing) → discard + IDR
+  rx.feed_datagram(video_datagram(3, true, 0, {0x04}), 300);  // recovery IDR → must deliver
+
+  const auto aus = drain(rx);
+  std::vector<std::vector<std::uint8_t>> data;
+  for (const auto& au : aus) data.push_back(au.data);
+  CHECK(data == std::vector<std::vector<std::uint8_t>>{{0x01}, {0x04}});
+  CHECK(idr_count == 1);
+}
+
 TEST_CASE("IDR requests are suppressed while one is outstanding (§3.6)") {
   int idr_count = 0;
   VideoReceiver rx([&](std::uint32_t) { ++idr_count; });
