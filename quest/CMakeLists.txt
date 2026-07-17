@@ -17,9 +17,12 @@ target_include_directories(native_app_glue PUBLIC
   ${ANDROID_NDK}/sources/android/native_app_glue)
 
 add_library(loom_quest SHARED
+  src/au_splitter.cpp
   src/egl_context.cpp
   src/gl_scene.cpp
+  src/hevc_decoder.cpp
   src/main.cpp
+  src/surface_texture.cpp
   src/xr_app.cpp)
 
 target_link_libraries(loom_quest PRIVATE
@@ -28,7 +31,8 @@ target_link_libraries(loom_quest PRIVATE
   android
   log
   EGL
-  GLESv3)
+  GLESv3
+  mediandk)  # AMediaCodec / AMediaFormat (surface-mode HEVC decode)
 
 # Without this the linker drops ANativeActivity_onCreate as unused and the app
 # dies at launch with "Unable to find native library entry point".

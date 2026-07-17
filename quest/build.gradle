@@ -10,10 +10,10 @@ android {
 
   defaultConfig {
     applicationId 'com.loom.quest'
-    // minSdk 29 is not cosmetic: msquic/quictls is compiled against
-    // ANDROID_PLATFORM=android-29 (see reviews/M3.0-spike-r3-msquic-ndk.md), and
-    // WIFI_MODE_FULL_LOW_LATENCY is itself API 29+.
-    minSdk 29
+    // minSdk 31 (Quest 3 runs API 34): AMEDIAFORMAT_KEY_LOW_LATENCY is API 30 and
+    // AMEDIACODEC_KEY_LOW_LATENCY is API 31 (M3.2 R5 needs both). Well above
+    // msquic's android-29 build floor and WIFI_MODE_FULL_LOW_LATENCY (API 29).
+    minSdk 31
     targetSdk 36
     versionCode 1
     versionName '0.1'

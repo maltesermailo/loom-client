@@ -20,6 +20,8 @@
 
 #include "egl_context.hpp"
 #include "gl_scene.hpp"
+#include "hevc_decoder.hpp"
+#include "surface_texture.hpp"
 
 struct android_app;
 
@@ -68,7 +70,16 @@ class XrApp {
   void request_refresh_rate(float hz);
   void handle_session_state(XrSessionState state, bool* exit_requested);
   void render_eye(const XrView& view, EyeSwapchain& eye);
-  void paint_cylinder_once();
+
+  // M3.2 decode path: load the looped test bitstream and start the decoder.
+  // Falls back to the static test image if the file is absent (M3.1 behavior).
+  void start_decoder(android_app* app);
+
+  // Blits the current cylinder source into the layer's next swapchain image. The
+  // static-image path paints once; the video path repaints only on a new frame.
+  void paint_cylinder_test_image();
+  void paint_cylinder_from_decoder(const float transform[16]);
+  void blit_into_cylinder(GLuint program, GLenum target, GLuint texture, const float* transform);
 
   EglContext egl_;
 
@@ -94,8 +105,15 @@ class XrApp {
 
   FloorGrid grid_;
   GLuint test_texture_ = 0;
-  GLuint blit_program_ = 0;
+  GLuint blit_program_ = 0;      // samples a normal 2D texture (test image)
+  GLuint oes_blit_program_ = 0;  // samples the decoder's OES external texture
   GLuint blit_vao_ = 0;
+
+  // Video path (M3.2). When decoder_active_ is false the cylinder shows the
+  // static test image (M3.1 fallback, e.g. the bitstream file is missing).
+  bool decoder_active_ = false;
+  SurfaceTexture surface_texture_;
+  HevcDecoder decoder_;
 };
 
 }  // namespace loom::quest

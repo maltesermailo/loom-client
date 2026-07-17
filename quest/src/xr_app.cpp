@@ -1,10 +1,14 @@
 #include "xr_app.hpp"
 
+#include <GLES2/gl2ext.h>  // GL_TEXTURE_EXTERNAL_OES
 #include <android_native_app_glue.h>
 
 #include <cmath>
 #include <cstring>
+#include <fstream>
+#include <vector>
 
+#include "au_splitter.hpp"
 #include "log.hpp"
 
 namespace loom::quest {
@@ -32,12 +36,16 @@ bool xr_failed(XrResult result, const char* what) {
   return true;
 }
 
+// Both cylinder blits share this vertex shader. uTexTransform folds in the
+// source's coordinate convention: a Y-flip for the top-down test image, or the
+// SurfaceTexture matrix (crop + flip) for decoder output.
 constexpr const char* kBlitVertexShader = R"(#version 300 es
+uniform mat4 uTexTransform;
 out vec2 vUv;
 void main() {
   // Fullscreen triangle from gl_VertexID; no vertex buffer needed.
   vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-  vUv = p;
+  vUv = (uTexTransform * vec4(p, 0.0, 1.0)).xy;
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }
 )";
@@ -48,9 +56,26 @@ uniform sampler2D uTexture;
 in vec2 vUv;
 out vec4 outColor;
 void main() {
-  outColor = texture(uTexture, vec2(vUv.x, 1.0 - vUv.y));
+  outColor = texture(uTexture, vUv);
 }
 )";
+
+// The decoder renders into a GL_TEXTURE_EXTERNAL_OES texture, which needs the
+// external-sampler extension and its own sampler type.
+constexpr const char* kOesBlitFragmentShader = R"(#version 300 es
+#extension GL_OES_EGL_image_external_essl3 : require
+precision mediump float;
+uniform samplerExternalOES uTexture;
+in vec2 vUv;
+out vec4 outColor;
+void main() {
+  outColor = texture(uTexture, vUv);
+}
+)";
+
+// Column-major (s,t) -> (s, 1-t): the test texture is uploaded top-down, but GL
+// samples bottom-up. The OES path uses the SurfaceTexture matrix instead.
+constexpr float kFlipY[16] = {1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1};
 
 GLuint build_program(const char* vertex_src, const char* fragment_src) {
   const auto compile = [](GLenum type, const char* src) {
@@ -191,12 +216,45 @@ bool XrApp::create(android_app* app) {
   if (!grid_.create()) return false;
   test_texture_ = create_test_texture(kCylinderWidth, kCylinderHeight);
   blit_program_ = build_program(kBlitVertexShader, kBlitFragmentShader);
-  if (blit_program_ == 0) return false;
+  oes_blit_program_ = build_program(kBlitVertexShader, kOesBlitFragmentShader);
+  if (blit_program_ == 0 || oes_blit_program_ == 0) return false;
   glGenVertexArrays(1, &blit_vao_);
 
+  start_decoder(app);
   request_refresh_rate(kTargetRefreshHz);
 
   return true;
+}
+
+void XrApp::start_decoder(android_app* app) {
+  // The looped test bitstream is pushed to the app's external files dir (see
+  // quest/README.md). Absent → stay on the M3.1 static image rather than fail.
+  std::string path = std::string(app->activity->externalDataPath) + "/loom_test.hevc";
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file) {
+    LOOM_LOGI("no test bitstream at %s — showing static image", path.c_str());
+    return;
+  }
+
+  const std::streamsize size = file.tellg();
+  file.seekg(0);
+  std::vector<std::uint8_t> stream(static_cast<std::size_t>(size));
+  file.read(reinterpret_cast<char*>(stream.data()), size);
+
+  std::vector<AccessUnit> access_units = split_access_units(stream);
+  LOOM_LOGI("test bitstream: %lld bytes, %zu access units", static_cast<long long>(size),
+            access_units.size());
+  if (access_units.empty()) return;
+
+  if (!surface_texture_.create(app->activity->vm)) return;
+  if (!decoder_.create(surface_texture_.window(), static_cast<int>(kCylinderWidth),
+                       static_cast<int>(kCylinderHeight), std::move(access_units))) {
+    return;
+  }
+
+  decoder_.start();
+  decoder_active_ = true;
+  LOOM_LOGI("decoder started (low-latency requested)");
 }
 
 bool XrApp::create_instance(android_app* app) {
@@ -428,7 +486,8 @@ bool XrApp::poll_events(bool* exit_requested) {
   return true;
 }
 
-void XrApp::paint_cylinder_once() {
+void XrApp::blit_into_cylinder(GLuint program, GLenum target, GLuint texture,
+                               const float* transform) {
   uint32_t index = 0;
   XrSwapchainImageAcquireInfo acquire_info = {XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
   if (xr_failed(xrAcquireSwapchainImage(cylinder_swapchain_, &acquire_info, &index),
@@ -448,21 +507,31 @@ void XrApp::paint_cylinder_once() {
 
   glViewport(0, 0, static_cast<GLsizei>(cylinder_width_), static_cast<GLsizei>(cylinder_height_));
   glDisable(GL_DEPTH_TEST);
-  glUseProgram(blit_program_);
+  glUseProgram(program);
+  glUniformMatrix4fv(glGetUniformLocation(program, "uTexTransform"), 1, GL_FALSE, transform);
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, test_texture_);
-  glUniform1i(glGetUniformLocation(blit_program_, "uTexture"), 0);
+  glBindTexture(target, texture);
+  glUniform1i(glGetUniformLocation(program, "uTexture"), 0);
   glBindVertexArray(blit_vao_);
   glDrawArrays(GL_TRIANGLES, 0, 3);
 
   glBindVertexArray(0);
+  glBindTexture(target, 0);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glDeleteFramebuffers(1, &framebuffer);
 
   XrSwapchainImageReleaseInfo release_info = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
   xrReleaseSwapchainImage(cylinder_swapchain_, &release_info);
+}
 
+void XrApp::paint_cylinder_test_image() {
+  blit_into_cylinder(blit_program_, GL_TEXTURE_2D, test_texture_, kFlipY);
   cylinder_painted_ = true;
+}
+
+void XrApp::paint_cylinder_from_decoder(const float transform[16]) {
+  blit_into_cylinder(oes_blit_program_, GL_TEXTURE_EXTERNAL_OES, surface_texture_.texture(),
+                     transform);
 }
 
 void XrApp::render_eye(const XrView& view, EyeSwapchain& eye) {
@@ -523,9 +592,16 @@ void XrApp::render_frame() {
   std::vector<const XrCompositionLayerBaseHeader*> layers;
 
   if (frame_state.shouldRender == XR_TRUE && poses_valid) {
-    // The test image never changes, so it is painted once rather than every
-    // frame — the compositor keeps resampling the same swapchain image for free.
-    if (!cylinder_painted_) paint_cylinder_once();
+    // Freshness over completeness (§6.4): repaint the cylinder only when the
+    // decoder has produced a new frame; otherwise the compositor keeps
+    // resampling the last image, so head motion stays smooth through a stall.
+    // The static fallback (no decoder) is painted once.
+    if (decoder_active_) {
+      float transform[16];
+      if (surface_texture_.update(transform)) paint_cylinder_from_decoder(transform);
+    } else if (!cylinder_painted_) {
+      paint_cylinder_test_image();
+    }
 
     for (uint32_t i = 0; i < view_count; ++i) {
       render_eye(views[i], eyes_[i]);

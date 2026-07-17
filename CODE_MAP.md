@@ -146,22 +146,33 @@ Maven AAR consumed via AGP prefab, so Gradle owns the dependency graph and drive
 `quest/CMakeLists.txt` through `externalNativeBuild`. `check.sh` format-checks `quest/src` but does
 not build it. Build/deploy commands and the pinned toolchain: [`quest/README.md`](quest/README.md).
 
-As of M3.1 this is presentation only: no transport, no decode, and **no dependency on `proto/` or
-`core/`** — those arrive with the session in M3.3.
+As of M3.2 this decodes a looped local bitstream onto the cylinder, but still has **no dependency
+on `proto/` or `core/`** — the session and transport arrive in M3.3. The decode path's shape (a
+decode thread feeding access units, the render thread latching the newest frame) is what M3.3
+keeps; only the access-unit *source* changes, from the looped file to `core`'s reassembly output.
 
 | File | What it is | Key symbols | § |
 |---|---|---|---|
 | [`AndroidManifest.xml`](quest/AndroidManifest.xml) | NativeActivity + `com.oculus.intent.category.VR` + WiFi permissions | — | — |
 | [`LoomActivity.kt`](quest/kotlin/com/loom/quest/LoomActivity.kt) | **The entire JVM surface**: holds `WIFI_MODE_FULL_LOW_LATENCY` (no NDK equivalent) | `LoomActivity` | ARCH 6.1 |
 | [`main.cpp`](quest/src/main.cpp) | `android_main`; Android lifecycle + the frame loop | `android_main`, `on_app_cmd` | — |
-| [`xr_app.hpp`](quest/src/xr_app.hpp) · [`.cpp`](quest/src/xr_app.cpp) | OpenXR instance/session/spaces/swapchains; submits the two layers | `XrApp::{create,poll_events,render_frame}` | ARCH 6.2 |
+| [`xr_app.hpp`](quest/src/xr_app.hpp) · [`.cpp`](quest/src/xr_app.cpp) | OpenXR session/swapchains; the two layers; OES→cylinder blit | `XrApp::{create,render_frame,start_decoder}` | ARCH 6.2 |
 | [`egl_context.hpp`](quest/src/egl_context.hpp) · [`.cpp`](quest/src/egl_context.cpp) | EGL context; no window surface (the compositor owns the display) | `EglContext::create` | — |
-| [`gl_scene.hpp`](quest/src/gl_scene.hpp) · [`.cpp`](quest/src/gl_scene.cpp) | Floor grid + generated test texture | `FloorGrid`, `create_test_texture`, `Mat4` | — |
+| [`gl_scene.hpp`](quest/src/gl_scene.hpp) · [`.cpp`](quest/src/gl_scene.cpp) | Floor grid + generated test texture (static fallback) | `FloorGrid`, `create_test_texture`, `Mat4` | — |
+| [`hevc_decoder.hpp`](quest/src/hevc_decoder.hpp) · [`.cpp`](quest/src/hevc_decoder.cpp) | AMediaCodec HEVC decode, surface mode, decode thread + R5 metrics | `HevcDecoder`, `DecodeMetrics` | ARCH 6.1, §5 |
+| [`surface_texture.hpp`](quest/src/surface_texture.hpp) · [`.cpp`](quest/src/surface_texture.cpp) | JNI `SurfaceTexture` → `ASurfaceTexture` → OES texture; new-frame latch | `SurfaceTexture::{create,update,window}` | ARCH 6.2 |
+| [`au_splitter.hpp`](quest/src/au_splitter.hpp) · [`.cpp`](quest/src/au_splitter.cpp) | Annex-B → per-frame access units (offline path only) | `split_access_units`, `AccessUnit` | §5.5 |
 | [`log.hpp`](quest/src/log.hpp) | `loom` logcat tag | `LOOM_LOGI`, `LOOM_LOGE` | — |
 
 **Notes**
 - The desktop is *not* drawn into the eye buffers (ARCHITECTURE §6.2). The projection layer holds
-  only the floor grid; the cylinder layer's swapchain is what video lands in from M3.2.
+  only the floor grid; the cylinder layer's swapchain is where decoded video lands.
+- The cylinder is repainted **only when the decoder produced a new frame** (`SurfaceTexture::update`
+  timestamp-delta); otherwise the compositor re-samples the last image for free, so head motion
+  stays smooth through a decode/network stall (§6.4 freshness).
+- **Decoder feed must never burst to catch up** after a stall — that builds a permanent backlog and
+  wrecks latency (the R5 measurement bug; see `reviews/M3.2-mediacodec-r5.md`). R5 result:
+  1 frame in flight, ~9 ms decode; low-latency is structural to the §5 stream, not the codec flag.
 - The cylinder is posed in **LOCAL** space, so a runtime recenter re-origins the space and the
   screen follows the user with no code of ours involved.
 - `main.cpp`'s looper timeout must not block while resumed: OpenXR session-state events arrive via
