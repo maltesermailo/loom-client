@@ -166,4 +166,9 @@ void VideoReceiver::stop() {
   cv_.notify_all();
 }
 
+void VideoReceiver::resume() {
+  std::lock_guard<std::mutex> lk(mu_);
+  stop_ = false;
+}
+
 }  // namespace loom::core

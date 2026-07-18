@@ -71,8 +71,16 @@ class VideoReceiver {
   // stop() has been called and the queue is drained. Decode thread.
   std::optional<AccessUnit> pop_au();
 
-  // Wake a blocked pop_au() for shutdown.
+  // Wake a blocked pop_au() for shutdown. After stop(), pop_au() drains any
+  // queued access units and then returns nullopt.
   void stop();
+
+  // Undo a stop() so pop_au() blocks for new frames again. Used when the decoder
+  // is swapped mid-session (a §8 resolution change) — stop() unblocks the old
+  // decode thread so it can join, and resume() revives this shared receiver for
+  // the new decoder. The reassembly/IDR state is deliberately untouched: the
+  // frame_seq stream continues across the switch (§8).
+  void resume();
 
   // Producer-thread snapshot.
   Counters counters() const { return counters_; }

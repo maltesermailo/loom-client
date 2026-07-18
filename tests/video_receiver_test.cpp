@@ -49,6 +49,25 @@ TEST_CASE("in-order frames assemble into access units, capture_ts stripped") {
   CHECK(rx.counters().frames_received == 2);
 }
 
+TEST_CASE("resume() revives the receiver for a swapped decoder") {
+  // A mid-session resolution change (§8) swaps the decoder: HevcDecoder::stop()
+  // stops this shared receiver to unblock the old decode thread, then resume()
+  // must revive it so the new decoder keeps popping the continuing frame_seq.
+  VideoReceiver rx([](std::uint32_t) {});
+  rx.feed_datagram(video_datagram(0, true, 1000, {0xAA}), 0);
+
+  rx.stop();
+  CHECK(rx.pop_au().has_value());   // the queued keyframe drains
+  CHECK(!rx.pop_au().has_value());  // stopped → nullopt (old decode thread exits)
+
+  rx.resume();
+  rx.feed_datagram(video_datagram(1, false, 2000, {0xBB}), 14);
+  const auto au = rx.pop_au();  // no longer stopped: returns the next frame
+  REQUIRE(au.has_value());
+  CHECK(au->capture_ts == 2000);
+  CHECK(au->data == std::vector<std::uint8_t>{0xBB});
+}
+
 TEST_CASE("a gap discards the frame and fires exactly one IDR request") {
   std::vector<std::uint32_t> idr_requests;
   VideoReceiver rx([&](std::uint32_t last_good) { idr_requests.push_back(last_good); });

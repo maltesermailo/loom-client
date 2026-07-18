@@ -69,6 +69,7 @@ dependencies {
     implementation(libs.meta.spatial.sdk.toolkit)
     implementation(libs.meta.spatial.sdk.vr)
     implementation(libs.meta.spatial.sdk.compose)
+    implementation(libs.meta.spatial.sdk.uiset)
 
     // Compose — panels render Android Compose UI.
     implementation("androidx.appcompat:appcompat:1.7.0")
