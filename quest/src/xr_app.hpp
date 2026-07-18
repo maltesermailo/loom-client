@@ -73,8 +73,12 @@ class XrApp {
 
   bool session_running() const { return session_running_; }
 
-  // Toggles the in-headset debug overlay (wired to the headset volume key).
+  // Toggles the in-headset debug overlay (wired to the headset volume-up key).
   void toggle_overlay() { overlay_.toggle(); }
+
+  // Toggles cylinder sharpening at runtime (volume-down) for A/B comparison; a
+  // no-op when the runtime lacks the extension.
+  void toggle_sharpening();
 
  private:
   std::vector<std::string> overlay_lines();
@@ -119,7 +123,19 @@ class XrApp {
   std::vector<XrSwapchainImageOpenGLESKHR> cylinder_images_;
   uint32_t cylinder_width_ = 0;
   uint32_t cylinder_height_ = 0;
+  // Mip levels on the cylinder swapchain (1 if the runtime rejected a chain);
+  // regenerated per blit so the compositor can trilinear-filter the minified
+  // desktop instead of aliasing the base level into edge shimmer.
+  uint32_t cylinder_mip_count_ = 1;
   bool cylinder_painted_ = false;
+
+  // Whether the runtime advertised XR_FB_composition_layer_settings; gates the
+  // cylinder layer's settings chain (§6.2), which carries both quality
+  // super-sampling (anti-aliases the minified desktop — kills edge shimmer) and
+  // sharpening. sharpening_on_ is the runtime A/B toggle (volume-down) for the
+  // sharpening flag only; super-sampling stays on whenever the extension exists.
+  bool layer_settings_supported_ = false;
+  bool sharpening_on_ = true;
 
   FloorGrid grid_;
   GLuint test_texture_ = 0;

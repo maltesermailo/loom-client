@@ -37,17 +37,27 @@ void on_app_cmd(android_app* app, int32_t cmd) {
   }
 }
 
-// The headset's volume-up key toggles the debug overlay. Controller buttons come
-// through OpenXR (M4); the volume keys reach us here via the Android input queue,
-// which is enough for a dev toggle without the OpenXR action system.
+// The headset's volume keys drive dev toggles: volume-up the debug overlay,
+// volume-down the cylinder sharpening A/B. Controller buttons come through
+// OpenXR (M4); the volume keys reach us here via the Android input queue, which
+// is enough for a dev toggle without the OpenXR action system.
 int32_t on_input(android_app* app, AInputEvent* event) {
   auto* state = static_cast<AppState*>(app->userData);
-  if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY &&
-      AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_DOWN &&
-      AKeyEvent_getKeyCode(event) == AKEYCODE_VOLUME_UP) {
-    if (state->xr != nullptr) state->xr->toggle_overlay();
-    return 1;  // consume (volume-down still adjusts volume)
+  if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_KEY ||
+      AKeyEvent_getAction(event) != AKEY_EVENT_ACTION_DOWN) {
+    return 0;
   }
+
+  const int32_t key = AKeyEvent_getKeyCode(event);
+  if (key == AKEYCODE_VOLUME_UP) {
+    if (state->xr != nullptr) state->xr->toggle_overlay();
+    return 1;  // consume
+  }
+  if (key == AKEYCODE_VOLUME_DOWN) {
+    if (state->xr != nullptr) state->xr->toggle_sharpening();
+    return 1;  // consume
+  }
+
   return 0;
 }
 

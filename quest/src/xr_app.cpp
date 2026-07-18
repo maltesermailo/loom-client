@@ -47,6 +47,28 @@ bool xr_failed(XrResult result, const char* what) {
   return true;
 }
 
+// Two-call enumeration of the runtime's instance extensions. Used to gate
+// optional extensions: an unsupported name passed to xrCreateInstance fails the
+// whole call, so we probe first rather than assume availability.
+bool instance_extension_supported(const char* name) {
+  uint32_t count = 0;
+  if (xr_failed(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr),
+                "xrEnumerateInstanceExtensionProperties(count)")) {
+    return false;
+  }
+
+  std::vector<XrExtensionProperties> props(count, {XR_TYPE_EXTENSION_PROPERTIES});
+  if (xr_failed(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, props.data()),
+                "xrEnumerateInstanceExtensionProperties")) {
+    return false;
+  }
+
+  for (const auto& prop : props) {
+    if (std::strcmp(prop.extensionName, name) == 0) return true;
+  }
+  return false;
+}
+
 // Both cylinder blits share this vertex shader. uTexTransform folds in the
 // source's coordinate convention: a Y-flip for the top-down test image, or the
 // SurfaceTexture matrix (crop + flip) for decoder output.
@@ -367,12 +389,27 @@ bool XrApp::create_instance(android_app* app) {
   android_info.applicationVM = app->activity->vm;
   android_info.applicationActivity = app->activity->clazz;
 
-  const char* extensions[] = {
+  // Core extensions: the client cannot run without any of these, so a missing
+  // one should (and will) fail xrCreateInstance loudly.
+  std::vector<const char*> extensions = {
       XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME,
       XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
       XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME,
       XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
   };
+
+  // XR_FB_composition_layer_settings (§6.2) drives super-sampling and sharpening
+  // on the cylinder layer — an optional quality win, so probe for it and enable
+  // it only when the runtime advertises it (confirmed here, not assumed). When
+  // absent the layer is simply submitted without the settings chain.
+  layer_settings_supported_ =
+      instance_extension_supported(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+  if (layer_settings_supported_) {
+    extensions.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+    LOOM_LOGI("XR_FB_composition_layer_settings present: super-sampling + sharpening enabled");
+  } else {
+    LOOM_LOGI("XR_FB_composition_layer_settings absent: super-sampling + sharpening off");
+  }
 
   XrInstanceCreateInfo create_info = {XR_TYPE_INSTANCE_CREATE_INFO};
   create_info.next = &android_info;
@@ -380,8 +417,8 @@ bool XrApp::create_instance(android_app* app) {
   std::strcpy(create_info.applicationInfo.applicationName, "loom");
   create_info.applicationInfo.applicationVersion = 1;
   std::strcpy(create_info.applicationInfo.engineName, "loom");
-  create_info.enabledExtensionCount = sizeof(extensions) / sizeof(extensions[0]);
-  create_info.enabledExtensionNames = extensions;
+  create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+  create_info.enabledExtensionNames = extensions.data();
 
   if (xr_failed(xrCreateInstance(&create_info, &instance_), "xrCreateInstance")) return false;
 
@@ -389,6 +426,16 @@ bool XrApp::create_instance(android_app* app) {
   system_info.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
 
   return !xr_failed(xrGetSystem(instance_, &system_info, &system_id_), "xrGetSystem");
+}
+
+void XrApp::toggle_sharpening() {
+  if (!layer_settings_supported_) {
+    LOOM_LOGI("sharpening toggle ignored: extension not supported");
+    return;
+  }
+
+  sharpening_on_ = !sharpening_on_;
+  LOOM_LOGI("cylinder sharpening %s", sharpening_on_ ? "on" : "off");
 }
 
 bool XrApp::create_session() {
@@ -490,6 +537,14 @@ bool XrApp::create_cylinder_swapchain() {
   cylinder_width_ = kCylinderWidth;
   cylinder_height_ = kCylinderHeight;
 
+  // Full mip chain so the compositor can trilinear-filter the desktop, which it
+  // minifies heavily onto the cylinder (2560 source px across ~1000 display px);
+  // sampling only the base level aliases high-contrast edges into shimmer.
+  uint32_t mip_count = 1;
+  for (uint32_t dim = std::max(cylinder_width_, cylinder_height_); dim > 1; dim >>= 1) {
+    ++mip_count;
+  }
+
   XrSwapchainCreateInfo info = {XR_TYPE_SWAPCHAIN_CREATE_INFO};
   info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
   info.format = GL_RGBA8;
@@ -498,11 +553,21 @@ bool XrApp::create_cylinder_swapchain() {
   info.height = cylinder_height_;
   info.faceCount = 1;
   info.arraySize = 1;
-  info.mipCount = 1;
-  if (xr_failed(xrCreateSwapchain(session_, &info, &cylinder_swapchain_),
-                "xrCreateSwapchain(cylinder)")) {
-    return false;
+  info.mipCount = mip_count;
+
+  // Not every runtime allocates mipmapped swapchains; fall back to a single level
+  // rather than fail to bring the cylinder up at all.
+  if (XR_FAILED(xrCreateSwapchain(session_, &info, &cylinder_swapchain_))) {
+    LOOM_LOGI("mipmapped cylinder swapchain rejected; falling back to mipCount 1");
+    info.mipCount = mip_count = 1;
+    if (xr_failed(xrCreateSwapchain(session_, &info, &cylinder_swapchain_),
+                  "xrCreateSwapchain(cylinder)")) {
+      return false;
+    }
   }
+  cylinder_mip_count_ = mip_count;
+  LOOM_LOGI("cylinder swapchain: %ux%u, %u mip level(s)", cylinder_width_, cylinder_height_,
+            cylinder_mip_count_);
 
   uint32_t image_count = 0;
   xrEnumerateSwapchainImages(cylinder_swapchain_, 0, &image_count, nullptr);
@@ -623,6 +688,15 @@ void XrApp::blit_into_cylinder(GLuint program, GLenum target, GLuint texture,
   glBindVertexArray(0);
   glBindTexture(target, 0);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  // Rebuild the mip chain from the base level we just rendered, so the compositor
+  // has prefiltered levels to sample under minification.
+  if (cylinder_mip_count_ > 1) {
+    glBindTexture(GL_TEXTURE_2D, cylinder_images_[index].image);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+  }
+
   glDeleteFramebuffers(1, &framebuffer);
 
   XrSwapchainImageReleaseInfo release_info = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -694,6 +768,9 @@ void XrApp::render_frame() {
   std::vector<XrCompositionLayerProjectionView> projection_views(view_count);
   XrCompositionLayerProjection projection_layer = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
   XrCompositionLayerCylinderKHR cylinder_layer = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+  // Chained onto cylinder_layer.next below; declared here so it outlives the
+  // render block and stays alive for the xrEndFrame read at function end.
+  XrCompositionLayerSettingsFB cylinder_settings = {XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
   XrCompositionLayerQuad overlay_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
   std::vector<const XrCompositionLayerBaseHeader*> layers;
 
@@ -751,6 +828,19 @@ void XrApp::render_frame() {
     cylinder_layer.radius = kCylinderRadius;
     cylinder_layer.centralAngle = kCylinderCentralAngle;
     cylinder_layer.aspectRatio = kCylinderAspect;
+
+    // §6.2 layer settings. Super-sampling anti-aliases the desktop, which the
+    // compositor minifies ~3:1 onto the cylinder (2560 px source across ~55° of a
+    // ~110° FOV); without it, high-contrast edges alias and shimmer as the layer
+    // reprojects under head motion. Sharpening rides the volume-down A/B toggle.
+    if (layer_settings_supported_) {
+      cylinder_settings.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SUPER_SAMPLING_BIT_FB;
+      if (sharpening_on_) {
+        cylinder_settings.layerFlags |= XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+      }
+      cylinder_layer.next = &cylinder_settings;
+    }
+
     layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder_layer));
 
     // Debug overlay on top, refreshed every frame so its stats keep ticking even
