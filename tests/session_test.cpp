@@ -227,6 +227,82 @@ TEST_CASE("encode_stats builds a §3.7 STATS frame") {
   CHECK(body_int(d.value(), 6) == 32000);  // e2e present
 }
 
+// Drive a session all the way to STREAMING, returning it ready for streaming-
+// phase tests.
+Session streaming_session() {
+  Session s{HelloParams{}};
+  s.on_event(Event::Connected);
+  s.poll();
+  feed(s, welcome());
+  s.poll();
+  feed(s, config());
+  s.poll();
+  feed(s, start());
+  s.poll();
+  REQUIRE(s.state() == State::Streaming);
+  return s;
+}
+
+TEST_CASE("mid-session CONFIG is applied, ACKed, and raises ConfigChanged") {
+  Session s = streaming_session();
+
+  // A new generation with a smaller resolution (a VIEWPORT-driven reconfig, §8).
+  feed(s, frame(control::kConfig,
+                {{Value::integer(0), Value::integer(2)},
+                 {Value::integer(1), Value::integer(1)},
+                 {Value::integer(2), Value::array({Value::integer(1920), Value::integer(1080)})},
+                 {Value::integer(3), Value::integer(72)},
+                 {Value::integer(4), Value::integer(0)},
+                 {Value::integer(5), Value::integer(40000)}}));
+  const auto acts = s.poll();
+
+  CHECK(s.state() == State::Streaming);  // stays streaming; media is not torn down
+  CHECK(has_kind(acts, Action::Kind::ConfigChanged));
+  CHECK(sent(acts).msg_type == control::kConfigAck);
+  CHECK(body_int(sent(acts), 0) == 2);  // ACKs the new generation
+  REQUIRE(s.config().has_value());
+  CHECK(s.config()->generation == 2);
+  CHECK(s.config()->width == 1920);
+  CHECK(s.config()->height == 1080);
+}
+
+TEST_CASE("send_viewport emits VIEWPORT and is rate-limited to 1 per 250 ms") {
+  Session s = streaming_session();
+
+  CHECK(s.send_viewport(2560, 1440, 1'000'000));
+  auto d = sent(s.poll());
+  CHECK(d.msg_type == control::kViewport);
+  {
+    // Body {0: [w, h]}.
+    bool found = false;
+    for (const auto& [k, v] : d.body) {
+      if (k == Value::integer(0) && v.type() == Value::Type::Array) {
+        REQUIRE(v.as_array().size() == 2);
+        CHECK(v.as_array()[0].as_int() == 2560);
+        CHECK(v.as_array()[1].as_int() == 1440);
+        found = true;
+      }
+    }
+    CHECK(found);
+  }
+
+  // Within 250 ms: suppressed, no action queued.
+  CHECK_FALSE(s.send_viewport(1920, 1080, 1'100'000));
+  CHECK(s.poll().empty());
+
+  // After 250 ms: allowed again.
+  CHECK(s.send_viewport(1920, 1080, 1'300'000));
+  CHECK(sent(s.poll()).msg_type == control::kViewport);
+}
+
+TEST_CASE("send_viewport is ignored before STREAMING") {
+  Session s{HelloParams{}};
+  s.on_event(Event::Connected);
+  s.poll();
+  CHECK_FALSE(s.send_viewport(2560, 1440, 1'000'000));
+  CHECK(s.poll().empty());
+}
+
 TEST_CASE("clock sync: CLOCK_PONGs through the session match the min-filter") {
   // The min-filter is vector-proven in clocksync_test; this proves the *live
   // wire path* (encode/decode PONG → filter) preserves the samples end to end.

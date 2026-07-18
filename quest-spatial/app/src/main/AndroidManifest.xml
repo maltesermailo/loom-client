@@ -39,7 +39,7 @@
       android:exported="true"
       android:resizeableActivity="true"
     >
-      <layout android:defaultHeight="720dp" android:defaultWidth="1280dp" />
+      <layout android:defaultHeight="1152dp" android:defaultWidth="2048dp" />
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.DEFAULT" />

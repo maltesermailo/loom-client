@@ -167,6 +167,11 @@ int main(int argc, char** argv) {
         case Action::Kind::MediaExpected:
           start_media();
           break;
+        case Action::Kind::ConfigChanged:
+          // Mid-session reconfiguration (§8) is driven by VIEWPORT, which the
+          // SDL client never sends, so the host never reconfigures it. Nothing
+          // to do here; the decoder keeps the negotiated generation.
+          break;
         case Action::Kind::Fatal:
           std::fprintf(stderr, "loom-sdl: fatal: %s (0x%02llx)\n", errors::name(a.code),
                        static_cast<unsigned long long>(a.code));

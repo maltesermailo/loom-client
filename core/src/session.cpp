@@ -42,6 +42,20 @@ std::optional<std::int64_t> find_pair_elem(const Value::Map& m, std::int64_t key
   return std::nullopt;
 }
 
+// Parse a CONFIG (0x03) body into a SessionConfig (§3.4). Missing keys default
+// to 0, matching the ignore-unknown / best-effort decode elsewhere.
+SessionConfig parse_config(const Value::Map& body) {
+  SessionConfig c;
+  c.generation = static_cast<std::uint64_t>(find_int(body, 0).value_or(0));
+  c.codec = static_cast<std::uint64_t>(find_int(body, 1).value_or(0));
+  c.width = static_cast<std::uint64_t>(find_pair_elem(body, 2, 0).value_or(0));
+  c.height = static_cast<std::uint64_t>(find_pair_elem(body, 2, 1).value_or(0));
+  c.refresh = static_cast<std::uint64_t>(find_int(body, 3).value_or(0));
+  c.audio = static_cast<std::uint64_t>(find_int(body, 4).value_or(0));
+  c.bitrate_kbps = static_cast<std::uint64_t>(find_int(body, 5).value_or(0));
+  return c;
+}
+
 }  // namespace
 
 Session::Session(HelloParams params) : params_(std::move(params)) {}
@@ -146,6 +160,31 @@ std::vector<std::uint8_t> Session::encode_stats(const StatsInput& in) const {
   return control::encode_frame(control::kStats, body);
 }
 
+bool Session::send_viewport(std::uint32_t width, std::uint32_t height, std::int64_t now_us) {
+  // VIEWPORT is a streaming-phase request (§3.10); ignore it before START.
+  if (state_ != State::Streaming) return false;
+  if (viewport_sent_ && now_us - last_viewport_us_ < 250'000) return false;
+
+  viewport_sent_ = true;
+  last_viewport_us_ = now_us;
+
+  Value::Map body;
+  body.emplace_back(Value::integer(0),
+                    Value::array({Value::integer(width), Value::integer(height)}));
+  push({Action::Kind::SendControl, control::encode_frame(control::kViewport, body), 0});
+  return true;
+}
+
+void Session::send_config_ack(std::uint64_t generation) {
+  // CONFIG_ACK {0: generation} — the host MUST NOT send media for a generation
+  // before its ACK (§3.4).
+  push({Action::Kind::SendControl,
+        control::encode_frame(
+            control::kConfigAck,
+            {{Value::integer(0), Value::integer(static_cast<std::int64_t>(generation))}}),
+        0});
+}
+
 void Session::handle_frame(std::span<const std::uint8_t> frame, std::int64_t now_us) {
   auto r = control::decode_frame(frame);
   if (!r) {
@@ -182,8 +221,18 @@ void Session::handle_frame(std::span<const std::uint8_t> frame, std::int64_t now
     return;
   }
 
-  // Setup messages are only meaningful while negotiating. Mid-session CONFIG
-  // reconfiguration (§8) and CLOCK_PONG (§7) arrive in later milestones.
+  // Mid-session reconfiguration (§8): a new CONFIG (incremented generation) may
+  // arrive while STREAMING — e.g. after a VIEWPORT resolution request. Apply it,
+  // ACK it, and ask the app to reinitialize the decoder on the new parameter
+  // sets (which ride the next IDR). `frame_seq` continues; media is not torn down.
+  if (t == control::kConfig && state_ == State::Streaming) {
+    config_ = parse_config(body);
+    send_config_ack(config_->generation);
+    push({Action::Kind::ConfigChanged, {}, 0});
+    return;
+  }
+
+  // The remaining setup messages are only meaningful while negotiating.
   if (state_ != State::Negotiating) return;
 
   switch (step_) {
@@ -202,21 +251,8 @@ void Session::handle_frame(std::span<const std::uint8_t> frame, std::int64_t now
         fatal(errors::kProtocolViolation);
         return;
       }
-      SessionConfig c;
-      c.generation = static_cast<std::uint64_t>(find_int(body, 0).value_or(0));
-      c.codec = static_cast<std::uint64_t>(find_int(body, 1).value_or(0));
-      c.width = static_cast<std::uint64_t>(find_pair_elem(body, 2, 0).value_or(0));
-      c.height = static_cast<std::uint64_t>(find_pair_elem(body, 2, 1).value_or(0));
-      c.refresh = static_cast<std::uint64_t>(find_int(body, 3).value_or(0));
-      c.audio = static_cast<std::uint64_t>(find_int(body, 4).value_or(0));
-      c.bitrate_kbps = static_cast<std::uint64_t>(find_int(body, 5).value_or(0));
-      config_ = c;
-      // CONFIG_ACK {0: generation} — host MUST NOT send media before this.
-      push({Action::Kind::SendControl,
-            control::encode_frame(
-                control::kConfigAck,
-                {{Value::integer(0), Value::integer(static_cast<std::int64_t>(c.generation))}}),
-            0});
+      config_ = parse_config(body);
+      send_config_ack(config_->generation);
       step_ = Step::Start;
       return;
     }

@@ -34,6 +34,7 @@ bool NetSession::start(const std::string& host, std::uint16_t port) {
 
 void NetSession::pump(std::int64_t now_us) {
   just_started_streaming_ = false;
+  config_changed_ = false;
 
   while (auto ev = transport_.next_event()) {
     switch (ev->kind) {
@@ -58,6 +59,15 @@ void NetSession::pump(std::int64_t now_us) {
 
   session_.on_tick(now_us);  // queues a CLOCK_PING when due (§3.8)
 
+  // Emit a pending VIEWPORT request (§3.10). Retry until Session accepts it
+  // (its rate limit may suppress the first attempt), then dedup on the sent size.
+  const std::uint64_t req = requested_viewport_.load(std::memory_order_relaxed);
+  if (req != 0 && req != sent_viewport_ &&
+      session_.send_viewport(static_cast<std::uint32_t>(req >> 32),
+                             static_cast<std::uint32_t>(req & 0xffffffffu), now_us)) {
+    sent_viewport_ = req;
+  }
+
   for (const auto& a : session_.poll()) {
     switch (a.kind) {
       case Action::Kind::SendControl:
@@ -70,6 +80,9 @@ void NetSession::pump(std::int64_t now_us) {
       case Action::Kind::MediaExpected:
         streaming_ = true;
         just_started_streaming_ = true;
+        break;
+      case Action::Kind::ConfigChanged:
+        config_changed_ = true;
         break;
       case Action::Kind::Fatal:
         LOOM_LOGE("fatal session error, code 0x%02llx", static_cast<unsigned long long>(a.code));

@@ -11,6 +11,7 @@
 // Decode is elsewhere: the AMediaCodec decode thread pops access units from
 // receiver(); nothing about decode runs here.
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -34,8 +35,20 @@ class NetSession {
   // Newly reached STREAMING this pump (START received) — the app brings the
   // decoder up on the first true.
   bool just_started_streaming() const { return just_started_streaming_; }
+  // A mid-session CONFIG was applied this pump (§8) — the app tears down and
+  // recreates the decoder at the new config().
+  bool config_changed() const { return config_changed_; }
   bool streaming() const { return streaming_; }
   bool finished() const { return closed_ || fatal_; }
+
+  // Request the host stream at `width`x`height` (VIEWPORT, §3.10). Thread-safe:
+  // called from the UI thread; the pending size is forwarded to Session on the
+  // next pump (which enforces the §3.10 rate limit). Coalesces: only the most
+  // recent size matters.
+  void request_viewport(std::uint32_t width, std::uint32_t height) {
+    requested_viewport_.store((static_cast<std::uint64_t>(width) << 32) | height,
+                              std::memory_order_relaxed);
+  }
 
   const std::optional<loom::core::SessionConfig>& config() const { return session_.config(); }
   std::optional<loom::proto::clocksync::Estimate> clock() const { return session_.clock(); }
@@ -53,8 +66,14 @@ class NetSession {
 
   bool streaming_ = false;
   bool just_started_streaming_ = false;
+  bool config_changed_ = false;
   bool closed_ = false;
   bool fatal_ = false;
+
+  // VIEWPORT handoff: UI thread stores (width<<32 | height); the pump reads it,
+  // and `sent_viewport_` dedups so a settled size isn't re-sent every frame.
+  std::atomic<std::uint64_t> requested_viewport_{0};
+  std::uint64_t sent_viewport_ = 0;
 };
 
 }  // namespace loom::quest

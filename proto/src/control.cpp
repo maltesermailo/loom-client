@@ -25,6 +25,7 @@ std::optional<std::span<const std::int64_t>> known_keys(std::uint64_t msg_type) 
     case kConfigAck:
     case kInput:
     case kIdrRequest:
+    case kViewport:
     case kClockPing:
     case kBye:
     case kPairA:

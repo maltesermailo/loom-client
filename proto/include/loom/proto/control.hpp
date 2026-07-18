@@ -28,6 +28,7 @@ inline constexpr std::uint64_t kStart = 0x05;
 inline constexpr std::uint64_t kInput = 0x10;
 inline constexpr std::uint64_t kIdrRequest = 0x20;
 inline constexpr std::uint64_t kStats = 0x21;
+inline constexpr std::uint64_t kViewport = 0x22;
 inline constexpr std::uint64_t kClockPing = 0x30;
 inline constexpr std::uint64_t kClockPong = 0x31;
 inline constexpr std::uint64_t kError = 0x40;

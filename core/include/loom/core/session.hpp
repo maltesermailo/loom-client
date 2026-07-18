@@ -65,6 +65,7 @@ struct Action {
     SendControl,    // write `bytes` (a complete length-prefixed frame) to control
     Established,    // WELCOME received (host identified)
     MediaExpected,  // START received; bring up the decoder/media path (M1.2)
+    ConfigChanged,  // mid-session CONFIG applied (§8); recreate the decoder at config()
     Fatal,          // fatal: `code` is a PROTOCOL.md §10 error code
     Closed,         // clean close
   };
@@ -105,6 +106,13 @@ class Session {
   // Build a STATS frame (§3.7) to send on the control stream.
   std::vector<std::uint8_t> encode_stats(const StatsInput& in) const;
 
+  // Request that the host stream at `width`x`height` (VIEWPORT, §3.10) so the
+  // decoded video maps ~1:1 to the client's window. Best-effort: the host may
+  // clamp or ignore it. Only valid while STREAMING; rate-limited to at most one
+  // per 250 ms (§3.10) — a suppressed call is a no-op. Returns whether a frame
+  // was queued (drain it via poll() like every other action).
+  bool send_viewport(std::uint32_t width, std::uint32_t height, std::int64_t now_us);
+
   // --- observers ---
   State state() const { return state_; }
   const std::optional<std::string>& host_name() const { return host_name_; }
@@ -116,6 +124,7 @@ class Session {
   enum class Step { Welcome, Config, Start };  // next expected setup message
 
   void handle_frame(std::span<const std::uint8_t> frame, std::int64_t now_us);
+  void send_config_ack(std::uint64_t generation);
   void fatal(std::uint64_t code);
   void push(Action a);
 
@@ -132,6 +141,10 @@ class Session {
   std::optional<proto::clocksync::Estimate> clock_estimate_;
   std::int64_t last_ping_us_ = 0;
   bool pinged_ = false;
+
+  // VIEWPORT rate limit (§3.10): at most one per 250 ms.
+  std::int64_t last_viewport_us_ = 0;
+  bool viewport_sent_ = false;
 };
 
 }  // namespace loom::core
