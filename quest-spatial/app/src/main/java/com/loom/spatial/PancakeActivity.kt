@@ -32,14 +32,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.meta.spatial.uiset.button.PrimaryButton
-import com.meta.spatial.uiset.button.SecondaryButton
+import com.meta.spatial.uiset.button.PrimaryCircleButton
+import com.meta.spatial.uiset.button.SecondaryCircleButton
 import com.meta.spatial.uiset.theme.LocalColorScheme
 import com.meta.spatial.uiset.theme.LocalTypography
 import com.meta.spatial.uiset.theme.SpatialTheme
 import com.meta.spatial.uiset.theme.darkSpatialColorScheme
 import com.meta.spatial.uiset.theme.icons.SpatialIcons
 import com.meta.spatial.uiset.theme.icons.regular.FullScreen
+import com.meta.spatial.uiset.theme.icons.regular.MultiBrowser
 import kotlinx.coroutines.delay
 
 /**
@@ -194,15 +195,22 @@ private fun ExpandedPill(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(
-            text = if (width > 0) "Window ${width}×${height}" else "Window …",
+            text = if (width > 0) "${width}×${height}" else "…",
             style =
                 LocalTypography.current.body2.copy(
                     color = LocalColorScheme.current.primaryAlphaBackground))
-        PrimaryButton(
-            label = "Match to window",
-            leading = { Icon(SpatialIcons.Regular.FullScreen, contentDescription = null) },
+        // Match the stream to the window size (VIEWPORT, §3.10).
+        PrimaryCircleButton(
+            icon = {
+              Icon(SpatialIcons.Regular.FullScreen, contentDescription = "Match to window")
+            },
             onClick = onMatch)
-        SecondaryButton(label = "Monitors", onClick = onImmersive)
+        // Enter the immersive many-monitor workspace.
+        SecondaryCircleButton(
+            icon = {
+              Icon(SpatialIcons.Regular.MultiBrowser, contentDescription = "Immersive monitors")
+            },
+            onClick = onImmersive)
       }
 }
 
