@@ -67,6 +67,11 @@ static std::uint16_t be16(std::span<const std::uint8_t> b, std::size_t o) {
 }
 
 Result<DecodedDatagram, DropReason> decode(std::span<const std::uint8_t> bytes) {
+  return decode_with_streams(bytes, {});
+}
+
+Result<DecodedDatagram, DropReason> decode_with_streams(
+    std::span<const std::uint8_t> bytes, std::span<const std::uint16_t> extra_video_streams) {
   if (bytes.size() < kHeaderLen) return Err(DropReason::too_short);
   if (bytes.size() > kMaxDatagramLen) return Err(DropReason::oversize);
   if (bytes[0] != kMagic) return Err(DropReason::bad_magic);
@@ -84,7 +89,15 @@ Result<DecodedDatagram, DropReason> decode(std::span<const std::uint8_t> bytes) 
   const bool last = (flags & kFlagLastFragment) != 0;
   if (last != (frag_index == static_cast<std::uint16_t>(frag_count - 1)))
     return Err(DropReason::last_fragment_mismatch);
-  if (stream_id != 0 && stream_id != 1) return Err(DropReason::unknown_stream);
+
+  bool stream_ok = (stream_id == 0 || stream_id == 1);
+  for (std::uint16_t s : extra_video_streams) {
+    if (s == stream_id) {
+      stream_ok = true;
+      break;
+    }
+  }
+  if (!stream_ok) return Err(DropReason::unknown_stream);
 
   const DatagramHeader h{
       (flags & kFlagKeyframe) != 0, last, stream_id, frame_seq, frag_index, frag_count};

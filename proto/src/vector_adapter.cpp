@@ -101,7 +101,15 @@ static json datagram_encode(const json& in) {
 
 static json datagram_decode(const json& in) {
   const auto bytes = hex::from_hex(in.at("hex").get<std::string>());
-  const auto r = proto::decode(bytes);
+
+  // Optional: video stream_ids >= 2 negotiated this session (§3.4 multi-display,
+  // CONFIG key 6). Absent ⇒ the v1 default set {0 video, 1 audio}.
+  std::vector<std::uint16_t> extra;
+  if (auto it = in.find("extra_video_streams"); it != in.end() && it->is_array()) {
+    for (const auto& v : *it) extra.push_back(v.get<std::uint16_t>());
+  }
+
+  const auto r = proto::decode_with_streams(bytes, extra);
   if (!r.has_value()) return json{{"ok", false}, {"reason", proto::to_string(r.error())}};
   const auto& d = r.value();
   json header;

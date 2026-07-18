@@ -6,25 +6,33 @@ std::optional<std::span<const std::int64_t>> known_keys(std::uint64_t msg_type) 
   static constexpr std::int64_t k0[] = {0};
   static constexpr std::int64_t k01[] = {0, 1};
   static constexpr std::int64_t k012[] = {0, 1, 2};
+  static constexpr std::int64_t k0123[] = {0, 1, 2, 3};  // WELCOME + key 3 feature echo
   static constexpr std::int64_t k0_5[] = {0, 1, 2, 3, 4, 5};
-  static constexpr std::int64_t k0_6[] = {0, 1, 2, 3, 4, 5, 6};
+  static constexpr std::int64_t k0_6[] = {0, 1, 2, 3, 4, 5, 6};     // CONFIG + key 6 streams
+  static constexpr std::int64_t k0_7[] = {0, 1, 2, 3, 4, 5, 6, 7};  // STATS + key 7 stream_id
   using S = std::span<const std::int64_t>;
   switch (msg_type) {
     case kHello:
-    case kConfig:
       return S(k0_5);
+    // Multi-display (§3.4): CONFIG key 6 = additional video streams,
+    // WELCOME key 3 = active feature bitmask, STATS key 7 = the stream_id.
+    case kConfig:
+      return S(k0_6);
     case kWelcome:
+      return S(k0123);
+    case kStats:
+      return S(k0_7);
     case kClockPong:
       return S(k012);
-    case kStats:
-      return S(k0_6);
+    // Multi-display (§3.5/§3.6): INPUT key 1 = target display, IDR_REQUEST key 1
+    // = target stream_id; ERROR/PAIR_B/PAIR_RESULT already carry keys {0,1}.
+    case kInput:
+    case kIdrRequest:
     case kError:
     case kPairB:
     case kPairResult:
       return S(k01);
     case kConfigAck:
-    case kInput:
-    case kIdrRequest:
     case kViewport:
     case kClockPing:
     case kBye:

@@ -61,7 +61,15 @@ struct DecodedDatagram {
   std::size_t payload_len;
 };
 
-// Decode and validate a datagram header per §4. Validation order is normative.
+// Decode and validate a datagram header per §4, accepting only the always-present
+// streams 0 (primary-display video) and 1 (audio). Validation order is normative.
 Result<DecodedDatagram, DropReason> decode(std::span<const std::uint8_t> bytes);
+
+// As decode(), additionally accepting the video stream_ids >= 2 negotiated for
+// this session via CONFIG key 6 (§3.4 multi-display). A stream_id that is neither
+// 0, 1, nor one of these is dropped as unknown_stream, exactly as §4 requires for
+// an un-negotiated stream. decode() is this with an empty negotiated set.
+Result<DecodedDatagram, DropReason> decode_with_streams(
+    std::span<const std::uint8_t> bytes, std::span<const std::uint16_t> extra_video_streams);
 
 }  // namespace loom::proto
