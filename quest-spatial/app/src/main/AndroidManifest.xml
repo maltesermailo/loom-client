@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest
+  xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:horizonos="http://schemas.horizonos/sdk"
+  android:versionCode="1"
+  android:versionName="1.0"
+  android:installLocation="auto"
+>
+
+  <horizonos:uses-horizonos-sdk
+    horizonos:minSdkVersion="69"
+    horizonos:targetSdkVersion="69"
+  />
+  <uses-feature
+    android:name="android.hardware.vr.headtracking"
+    android:required="true"
+  />
+  <uses-feature android:glEsVersion="0x00030001" />
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+  <application android:allowBackup="false" android:label="Loom">
+    <meta-data
+      android:name="com.oculus.supportedDevices"
+      android:value="quest2|questpro|quest3"
+    />
+    <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
+    <uses-native-library
+      android:name="libossdk.oculus.so"
+      android:required="true"
+    />
+
+    <!-- Default launch: the desktop as a 2D window in Horizon Home, which the OS
+         draws, resizes, and curves (com.oculus.intent.category.2D). -->
+    <activity
+      android:name="com.loom.spatial.PancakeActivity"
+      android:theme="@style/PanelAppTheme"
+      android:exported="true"
+      android:resizeableActivity="true"
+    >
+      <layout android:defaultHeight="720dp" android:defaultWidth="1280dp" />
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="com.oculus.intent.category.2D" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+    <!-- Immersive many-monitor workspace; entered by intent from the window, so
+         it carries the VR category but no LAUNCHER. -->
+    <activity
+      android:name="com.loom.spatial.SpatialActivity"
+      android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+      android:launchMode="singleTask"
+      android:excludeFromRecents="false"
+      android:configChanges="screenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode"
+      android:exported="true"
+    >
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="com.oculus.intent.category.VR" />
+        <category android:name="android.intent.category.DEFAULT" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

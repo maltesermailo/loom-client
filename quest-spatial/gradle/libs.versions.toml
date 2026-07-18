@@ -1,0 +1,35 @@
+# Meta Spatial SDK client (ROADMAP M3.5). Versions pinned to Meta's own sample
+# toolchain (Meta-Spatial-SDK-Samples @ spatialsdk 0.13.2) — deliberately
+# separate from the OpenXR client's toolchain so the two builds stay isolated.
+[versions]
+spatialsdk = "0.13.2"
+agp = "8.11.1"
+# Locked to 2.1.0: the meta.spatial.plugin puts kotlin-compiler-embeddable 2.1.0
+# on the build classpath, so the Kotlin Gradle plugin must match. 2.1.0 in turn
+# breaks on Gradle 8.14+, so the wrapper is pinned to 8.13 (the one version that
+# also satisfies AGP 8.11.1's >=8.13 floor).
+kotlin = "2.1.0"
+coreKtx = "1.13.1"
+composeActivity = "1.9.2"
+lifecycleRuntimeKtx = "2.8.6"
+composeBom = "2024.09.03"
+
+[libraries]
+meta-spatial-sdk-base = { group = "com.meta.spatial", name = "meta-spatial-sdk", version.ref = "spatialsdk" }
+meta-spatial-sdk-vr = { group = "com.meta.spatial", name = "meta-spatial-sdk-vr", version.ref = "spatialsdk" }
+meta-spatial-sdk-compose = { group = "com.meta.spatial", name = "meta-spatial-sdk-compose", version.ref = "spatialsdk" }
+meta-spatial-sdk-toolkit = { group = "com.meta.spatial", name = "meta-spatial-sdk-toolkit", version.ref = "spatialsdk" }
+
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "composeActivity" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+jetbrains-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+jetbrains-kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+meta-spatial-plugin = { id = "com.meta.spatial.plugin", version.ref = "spatialsdk" }

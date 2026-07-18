@@ -9,3 +9,9 @@ quest/.gradle/
 quest/local.properties
 quest/third_party/msquic/
 quest/third_party/msquic-build/
+# Quest Spatial hybrid client (Gradle/AGP)
+quest-spatial/build/
+quest-spatial/app/build/
+quest-spatial/app/.cxx/
+quest-spatial/.gradle/
+quest-spatial/local.properties
