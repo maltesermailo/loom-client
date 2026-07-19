@@ -104,6 +104,7 @@ struct StatsInput {
   std::uint64_t decode_us = 0;
   std::uint64_t rtt_us = 0;
   std::optional<std::uint64_t> e2e_us;  // omitted before the first clock sample
+  std::uint16_t stream_id = 0;          // §3.7 key 7: which video stream (multi-display)
 };
 
 class Session {

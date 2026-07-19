@@ -182,6 +182,11 @@ std::vector<std::uint8_t> Session::encode_stats(const StatsInput& in) const {
   if (in.e2e_us) {
     body.emplace_back(Value::integer(6), Value::integer(static_cast<std::int64_t>(*in.e2e_us)));
   }
+  // Key 7 (§3.7, multi-display): the stream these counters describe. Omitted for
+  // the primary so a single-stream STATS is byte-identical to a pre-feature peer.
+  if (in.stream_id != 0) {
+    body.emplace_back(Value::integer(7), Value::integer(in.stream_id));
+  }
   return control::encode_frame(control::kStats, body);
 }
 

@@ -272,7 +272,18 @@ TEST_CASE("encode_stats builds a §3.7 STATS frame") {
   CHECK(d.value().msg_type == control::kStats);
   CHECK(body_int(d.value(), 0) == 10);
   CHECK(body_int(d.value(), 5) == 4000);
-  CHECK(body_int(d.value(), 6) == 32000);  // e2e present
+  CHECK(body_int(d.value(), 6) == 32000);      // e2e present
+  CHECK(!body_int(d.value(), 7).has_value());  // primary stream omits key 7
+}
+
+TEST_CASE("encode_stats carries the stream_id for an extra display (§3.7 key 7)") {
+  Session s{HelloParams{}};
+  loom::core::StatsInput in;
+  in.frames_received = 5;
+  in.stream_id = 2;
+  const auto d = control::decode_frame(s.encode_stats(in));
+  REQUIRE(d.has_value());
+  CHECK(body_int(d.value(), 7) == 2);
 }
 
 // Drive a session all the way to STREAMING, returning it ready for streaming-
