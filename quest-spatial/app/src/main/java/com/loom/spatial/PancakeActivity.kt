@@ -2,9 +2,6 @@ package com.loom.spatial
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.Surface
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -12,7 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,7 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.meta.spatial.uiset.button.PrimaryCircleButton
 import com.meta.spatial.uiset.button.SecondaryCircleButton
 import com.meta.spatial.uiset.theme.LocalColorScheme
@@ -45,66 +40,56 @@ import com.meta.spatial.uiset.theme.icons.regular.MultiBrowser
 import kotlinx.coroutines.delay
 
 /**
- * Loom windowed mode (ROADMAP M3.5 / M6.3): the desktop as 2D window(s) in Horizon
- * Home, composited by the OS — the sharp, shimmer-free path. Default launch
+ * Loom windowed mode (ROADMAP M3.5 / M6.3): the primary desktop as a 2D window in
+ * Horizon Home, composited by the OS — the sharp, shimmer-free path. Default launch
  * (com.oculus.intent.category.2D).
  *
  * Multi-display fan-in: one QUIC session negotiates multi-display, so the host
- * streams one video per display (§3.4). The native bridge publishes the stream
- * count; this Activity lays out that many [SurfaceView]s side-by-side, attaching
- * each by slot — the bridge binds slot k to stream k and decodes into its surface.
- *
- * Each [SurfaceView] is what a decoder renders into; a Compose overlay sits on top
- * (SurfaceViews keep their default below-window Z-order). The overlay is the
- * auto-hiding pill control (M3.5): "Match to window" reads the primary surface's
- * pixel size and asks the host to stream at exactly that resolution (VIEWPORT,
- * §3.10); it also enters the immersive many-monitor workspace (SpatialActivity).
+ * streams one video per display (§3.4). This window shows the primary display
+ * (slot 0); each **additional** display gets its **own** Home window — a separate
+ * [DisplayWindowActivity] task — so Home draws, moves, and resizes them
+ * independently. This Activity owns the session lifetime (start/stop).
  */
 class PancakeActivity : ComponentActivity() {
 
-  // The primary (slot 0) surface size in pixels, published from its surfaceChanged.
-  // This is the resolution "Match to window" requests so the video maps ~1:1.
+  // The primary (slot 0) surface size in pixels; the resolution "Match to window"
+  // requests so the video maps ~1:1.
   private val surfaceWidth = mutableIntStateOf(0)
   private val surfaceHeight = mutableIntStateOf(0)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
 
-    // Start the session immediately; surfaces attach per slot as they are created.
-    nativeStart(HOST, PORT)
+    NativeBridge.start(HOST, PORT)
 
     setContent {
       SpatialTheme(colorScheme = darkSpatialColorScheme()) {
-        // Poll the negotiated stream count; show at least one panel while connecting.
+        // Open one extra window per additional display as the host reports them.
         var streamCount by remember { mutableIntStateOf(0) }
+        val opened = remember { mutableSetOf<Int>() }
         LaunchedEffect(Unit) {
           while (true) {
-            streamCount = nativeStreamCount()
-            delay(200)
+            streamCount = NativeBridge.streamCount()
+            for (slot in 1 until streamCount) {
+              if (opened.add(slot)) openDisplayWindow(slot)
+            }
+            delay(300)
           }
         }
-        val panels = if (streamCount > 0) streamCount else 1
 
         Box(Modifier.fillMaxSize()) {
-          // One SurfaceView per streamed display, side-by-side.
-          Row(Modifier.fillMaxSize()) {
-            for (slot in 0 until panels) {
-              VideoSurface(
-                  slot = slot,
-                  onPrimarySize = { w, h ->
-                    if (slot == 0) {
-                      surfaceWidth.intValue = w
-                      surfaceHeight.intValue = h
-                    }
-                  },
-                  modifier = Modifier.weight(1f).fillMaxHeight())
-            }
-          }
+          DisplaySurface(
+              slot = 0,
+              onSize = { w, h ->
+                surfaceWidth.intValue = w
+                surfaceHeight.intValue = h
+              },
+              modifier = Modifier.fillMaxSize())
 
           PillControl(
               width = surfaceWidth.intValue,
               height = surfaceHeight.intValue,
-              onMatch = { w, h -> nativeSetViewport(w, h) },
+              onMatch = { w, h -> NativeBridge.setViewport(w, h) },
               onImmersive = { launchImmersive() },
               modifier = Modifier.align(Alignment.TopCenter))
         }
@@ -113,8 +98,17 @@ class PancakeActivity : ComponentActivity() {
   }
 
   override fun onDestroy() {
-    nativeStop()
+    NativeBridge.stop()
     super.onDestroy()
+  }
+
+  /** Launch display `slot` as its own 2D Home window (a separate task). */
+  private fun openDisplayWindow(slot: Int) {
+    startActivity(
+        Intent(this, DisplayWindowActivity::class.java).apply {
+          putExtra(DisplayWindowActivity.EXTRA_SLOT, slot)
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        })
   }
 
   private fun launchImmersive() {
@@ -125,65 +119,10 @@ class PancakeActivity : ComponentActivity() {
         })
   }
 
-  private external fun nativeStart(host: String, port: Int)
-
-  private external fun nativeStop()
-
-  private external fun nativeSetViewport(width: Int, height: Int)
-
-  private external fun nativeAttachSurface(slot: Int, surface: Surface)
-
-  private external fun nativeDetachSurface(slot: Int)
-
-  private external fun nativeStreamCount(): Int
-
   companion object {
-    // Dev host; the config-file read (like the OpenXR client's loom_host.txt)
-    // lands when discovery arrives (M7.2).
+    // Dev host; discovery replaces this in M7.2.
     private const val HOST = "192.168.178.72"
     private const val PORT = 47800
-
-    init {
-      System.loadLibrary("loom_panel")
-    }
-  }
-
-  /**
-   * One decoder target. Attaches its surface to native slot [slot] on create and
-   * detaches on destroy; reports the primary slot's pixel size via [onPrimarySize].
-   * Created without lockCanvas so the surface has a GPU producer (AMediaCodec).
-   */
-  @Composable
-  private fun VideoSurface(
-      slot: Int,
-      onPrimarySize: (Int, Int) -> Unit,
-      modifier: Modifier = Modifier,
-  ) {
-    AndroidView(
-        factory = { ctx ->
-          SurfaceView(ctx).apply {
-            holder.addCallback(
-                object : SurfaceHolder.Callback {
-                  override fun surfaceCreated(holder: SurfaceHolder) {
-                    nativeAttachSurface(slot, holder.surface)
-                  }
-
-                  override fun surfaceChanged(
-                      holder: SurfaceHolder,
-                      format: Int,
-                      width: Int,
-                      height: Int,
-                  ) {
-                    onPrimarySize(width, height)
-                  }
-
-                  override fun surfaceDestroyed(holder: SurfaceHolder) {
-                    nativeDetachSurface(slot)
-                  }
-                })
-          }
-        },
-        modifier = modifier)
   }
 }
 
@@ -204,8 +143,6 @@ private fun PillControl(
     modifier: Modifier = Modifier,
 ) {
   var expanded by remember { mutableStateOf(true) }
-  // Bumped on every interaction so the auto-hide timer restarts even when we are
-  // already expanded (toggling `expanded` alone wouldn't re-key the effect).
   var interaction by remember { mutableIntStateOf(0) }
 
   LaunchedEffect(expanded, interaction) {
@@ -257,13 +194,11 @@ private fun ExpandedPill(
             style =
                 LocalTypography.current.body2.copy(
                     color = LocalColorScheme.current.primaryAlphaBackground))
-        // Match the stream to the window size (VIEWPORT, §3.10).
         PrimaryCircleButton(
             icon = {
               Icon(SpatialIcons.Regular.FullScreen, contentDescription = "Match to window")
             },
             onClick = onMatch)
-        // Enter the immersive many-monitor workspace.
         SecondaryCircleButton(
             icon = {
               Icon(SpatialIcons.Regular.MultiBrowser, contentDescription = "Immersive monitors")
@@ -274,7 +209,6 @@ private fun ExpandedPill(
 
 @Composable
 private fun CollapsedPill(onClick: () -> Unit) {
-  // A generous, easy-to-hit tap target around a thin visible line.
   Box(
       modifier = Modifier.height(28.dp).width(140.dp).clickable(onClick = onClick),
       contentAlignment = Alignment.Center) {

@@ -183,8 +183,10 @@ void run(std::string host, std::uint16_t port, Bridge* b) {
 
 }  // namespace
 
-extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_PancakeActivity_nativeStart(
-    JNIEnv* env, jobject /*thiz*/, jstring host, jint port) {
+extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_NativeBridge_start(JNIEnv* env,
+                                                                           jobject /*thiz*/,
+                                                                           jstring host,
+                                                                           jint port) {
   if (g_bridge != nullptr) return;  // already running
 
   const char* host_c = env->GetStringUTFChars(host, nullptr);
@@ -199,14 +201,14 @@ extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_PancakeActivity_nativeSt
 
 // The number of video streams the host is sending (0 until CONFIG). Kotlin polls
 // this to lay out that many panels.
-extern "C" JNIEXPORT jint JNICALL
-Java_com_loom_spatial_PancakeActivity_nativeStreamCount(JNIEnv* /*env*/, jobject /*thiz*/) {
+extern "C" JNIEXPORT jint JNICALL Java_com_loom_spatial_NativeBridge_streamCount(JNIEnv* /*env*/,
+                                                                                 jobject /*thiz*/) {
   return g_bridge != nullptr ? g_bridge->stream_count.load(std::memory_order_relaxed) : 0;
 }
 
 // Attach (or replace) the surface for panel `slot`. The run loop adopts it and
 // stands a decoder up for stream `slot`.
-extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_PancakeActivity_nativeAttachSurface(
+extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_NativeBridge_attachSurface(
     JNIEnv* env, jobject /*thiz*/, jint slot, jobject surface) {
   if (g_bridge == nullptr || slot < 0) return;
   // The fromSurface ref transfers to the queued event (adopted by the run loop).
@@ -219,15 +221,18 @@ extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_PancakeActivity_nativeAt
             window != nullptr ? "valid" : "null");
 }
 
-extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_PancakeActivity_nativeDetachSurface(
-    JNIEnv* /*env*/, jobject /*thiz*/, jint slot) {
+extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_NativeBridge_detachSurface(JNIEnv* /*env*/,
+                                                                                   jobject /*thiz*/,
+                                                                                   jint slot) {
   if (g_bridge == nullptr || slot < 0) return;
   std::lock_guard<std::mutex> lk(g_bridge->mu);
   g_bridge->surface_events.push_back({slot, nullptr});
 }
 
-extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_PancakeActivity_nativeSetViewport(
-    JNIEnv* /*env*/, jobject /*thiz*/, jint width, jint height) {
+extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_NativeBridge_setViewport(JNIEnv* /*env*/,
+                                                                                 jobject /*thiz*/,
+                                                                                 jint width,
+                                                                                 jint height) {
   if (g_bridge == nullptr || width <= 0 || height <= 0) return;
   g_bridge->viewport.store(
       (static_cast<std::uint64_t>(width) << 32) | static_cast<std::uint64_t>(height),
@@ -235,8 +240,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_PancakeActivity_nativeSe
   LOOM_LOGI("viewport request: %dx%d", static_cast<int>(width), static_cast<int>(height));
 }
 
-extern "C" JNIEXPORT void JNICALL
-Java_com_loom_spatial_PancakeActivity_nativeStop(JNIEnv* /*env*/, jobject /*thiz*/) {
+extern "C" JNIEXPORT void JNICALL Java_com_loom_spatial_NativeBridge_stop(JNIEnv* /*env*/,
+                                                                          jobject /*thiz*/) {
   if (g_bridge == nullptr) return;
 
   g_bridge->stop.store(true);

@@ -48,6 +48,26 @@
       </intent-filter>
     </activity>
 
+    <!-- One additional display as its own 2D Home window (M6.3). Launched in a
+         separate task per extra display so Home draws each independently;
+         documentLaunchMode="always" makes each launch a distinct window. Not in
+         the launcher (started only from PancakeActivity). -->
+    <activity
+      android:name="com.loom.spatial.DisplayWindowActivity"
+      android:theme="@style/PanelAppTheme"
+      android:exported="false"
+      android:resizeableActivity="true"
+      android:documentLaunchMode="always"
+      android:autoRemoveFromRecents="true"
+    >
+      <layout android:defaultHeight="1152dp" android:defaultWidth="2048dp" />
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="com.oculus.intent.category.2D" />
+      </intent-filter>
+    </activity>
+
     <!-- Immersive many-monitor workspace; entered by intent from the window, so
          it carries the VR category but no LAUNCHER. -->
     <activity
