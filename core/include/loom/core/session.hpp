@@ -31,6 +31,10 @@ enum class State {
   Failed,       // fatal ERROR or protocol violation
 };
 
+// HELLO key 5 / WELCOME key 3 feature bits (PROTOCOL.md §3.4).
+inline constexpr std::uint64_t kFeatureAudioPlayback = 0b01;  // bit 0 (audio is M5)
+inline constexpr std::uint64_t kFeatureMultiDisplay = 0b10;   // bit 1: fan in N streams
+
 // Capabilities advertised in HELLO (PROTOCOL.md §3.4).
 struct HelloParams {
   std::string client_name = "loom-client";
@@ -38,10 +42,25 @@ struct HelloParams {
   std::uint32_t max_width = 2560;
   std::uint32_t max_height = 1440;
   std::uint32_t max_refresh = 90;
-  std::uint64_t features = 0;  // bit0 = audio playback; 0 for now (audio is M5)
+  // Feature bitmask. A client that can decode+display concurrent streams sets
+  // kFeatureMultiDisplay; the host then fans out (CONFIG key 6). Default 0 keeps
+  // a single-stream session, bit-exact with a pre-feature peer.
+  std::uint64_t features = 0;
 };
 
-// Media description parsed from the host's CONFIG (PROTOCOL.md §3.4).
+// One additional video stream the host will send beyond the primary — a display
+// carried on its own stream_id (PROTOCOL.md §3.4 CONFIG key 6, multi-display).
+struct StreamConfig {
+  std::uint16_t stream_id = 0;  // >= 2 (0 is the primary, 1 is audio)
+  std::uint64_t width = 0;
+  std::uint64_t height = 0;
+  std::uint64_t refresh = 0;
+  std::uint64_t bitrate_kbps = 0;
+};
+
+// Media description parsed from the host's CONFIG (PROTOCOL.md §3.4). Keys 0-5
+// describe the primary video stream (stream_id 0) + audio; `extra_streams` is
+// CONFIG key 6, non-empty only when multi-display was negotiated.
 struct SessionConfig {
   std::uint64_t generation = 0;
   std::uint64_t codec = 0;
@@ -50,6 +69,7 @@ struct SessionConfig {
   std::uint64_t refresh = 0;
   std::uint64_t audio = 0;
   std::uint64_t bitrate_kbps = 0;
+  std::vector<StreamConfig> extra_streams;
 };
 
 // A lifecycle event fed in by the transport driver.
@@ -117,6 +137,9 @@ class Session {
   State state() const { return state_; }
   const std::optional<std::string>& host_name() const { return host_name_; }
   const std::optional<SessionConfig>& config() const { return config_; }
+  // Feature bits the host activated for this session (WELCOME key 3, §3.4).
+  // Test bit kFeatureMultiDisplay to decide whether to fan in extra streams.
+  std::uint64_t features() const { return active_features_; }
   // Current clock estimate (rtt/offset µs), or nullopt before the first sample.
   std::optional<proto::clocksync::Estimate> clock() const { return clock_estimate_; }
 
@@ -135,6 +158,7 @@ class Session {
   std::vector<Action> out_;
   std::optional<std::string> host_name_;
   std::optional<SessionConfig> config_;
+  std::uint64_t active_features_ = 0;  // WELCOME key 3 (§3.4)
 
   // Clock sync (§7): the min-filter lives in proto; we only wire it.
   proto::clocksync::ClockFilter clock_filter_;

@@ -110,6 +110,54 @@ TEST_CASE("full mirror handshake reaches Streaming") {
   CHECK(s.state() == State::Streaming);
 }
 
+TEST_CASE("multi-display: WELCOME key 3 and CONFIG key 6 are parsed") {
+  Session s{HelloParams{}};
+  s.on_event(Event::Connected);
+  s.poll();
+
+  // WELCOME advertising multi-display active (key 3 bit 1).
+  feed(s,
+       frame(control::kWelcome, {{Value::integer(0), Value::integer(1)},
+                                 {Value::integer(1), Value::text("host")},
+                                 {Value::integer(2), Value::bytes(std::vector<std::uint8_t>(16))},
+                                 {Value::integer(3), Value::integer(0b10)}}));
+  CHECK((s.features() & loom::core::kFeatureMultiDisplay) != 0);
+
+  // CONFIG carrying one extra stream (stream_id 2, 1920x1080) in key 6.
+  Value::Array streams;
+  streams.push_back(
+      Value::map({{Value::integer(0), Value::integer(2)},
+                  {Value::integer(1), Value::array({Value::integer(1920), Value::integer(1080)})},
+                  {Value::integer(2), Value::integer(72)},
+                  {Value::integer(3), Value::integer(40000)}}));
+  feed(s, frame(control::kConfig,
+                {{Value::integer(0), Value::integer(1)},
+                 {Value::integer(1), Value::integer(1)},
+                 {Value::integer(2), Value::array({Value::integer(2560), Value::integer(1440)})},
+                 {Value::integer(3), Value::integer(72)},
+                 {Value::integer(4), Value::integer(0)},
+                 {Value::integer(5), Value::integer(60000)},
+                 {Value::integer(6), Value::array(std::move(streams))}}));
+
+  REQUIRE(s.config().has_value());
+  REQUIRE(s.config()->extra_streams.size() == 1);
+  CHECK(s.config()->extra_streams[0].stream_id == 2);
+  CHECK(s.config()->extra_streams[0].width == 1920);
+  CHECK(s.config()->extra_streams[0].height == 1080);
+  CHECK(s.config()->extra_streams[0].refresh == 72);
+}
+
+TEST_CASE("single-display CONFIG leaves extra_streams empty") {
+  Session s{HelloParams{}};
+  s.on_event(Event::Connected);
+  s.poll();
+  feed(s, welcome());
+  feed(s, config());
+  REQUIRE(s.config().has_value());
+  CHECK(s.config()->extra_streams.empty());
+  CHECK(s.features() == 0);
+}
+
 TEST_CASE("two frames delivered in one buffer are both processed") {
   Session s{HelloParams{}};
   s.on_event(Event::Connected);

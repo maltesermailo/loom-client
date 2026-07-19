@@ -51,7 +51,11 @@ class VideoReceiver {
   // drop forces an IDR request; the argument is last_good_frame_seq (§3.6).
   using IdrRequestFn = std::function<void(std::uint32_t)>;
 
-  explicit VideoReceiver(IdrRequestFn on_idr);
+  // `stream_id` is the video stream this receiver assembles (0 = primary; ≥ 2 =
+  // an extra display, §3.4 multi-display). The app runs one receiver — and one
+  // decoder + one surface/layer — per stream. Datagrams for other stream_ids are
+  // ignored, so the app may feed one receiver all datagrams or pre-route them.
+  explicit VideoReceiver(IdrRequestFn on_idr, std::uint16_t stream_id = 0);
   ~VideoReceiver();
   VideoReceiver(const VideoReceiver&) = delete;
   VideoReceiver& operator=(const VideoReceiver&) = delete;
@@ -91,6 +95,7 @@ class VideoReceiver {
   void prune(std::uint32_t newest);
 
   IdrRequestFn on_idr_;
+  std::uint16_t stream_id_;  // the video stream this receiver assembles (§4)
   Counters counters_;
 
   loom::proto::reassembly::Reassembler reasm_;

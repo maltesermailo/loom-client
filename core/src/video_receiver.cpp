@@ -26,18 +26,22 @@ namespace reassembly = loom::proto::reassembly;
 
 }  // namespace
 
-VideoReceiver::VideoReceiver(IdrRequestFn on_idr) : on_idr_(std::move(on_idr)) {}
+VideoReceiver::VideoReceiver(IdrRequestFn on_idr, std::uint16_t stream_id)
+    : on_idr_(std::move(on_idr)), stream_id_(stream_id) {}
 
 VideoReceiver::~VideoReceiver() { stop(); }
 
 void VideoReceiver::feed_datagram(std::span<const std::uint8_t> datagram, std::int64_t now_ms) {
-  auto decoded = loom::proto::decode(datagram);
+  // Accept this receiver's own stream_id (≥ 2 requires the negotiated-streams
+  // form of decode; 0/1 are always valid), then keep only our stream.
+  const std::uint16_t mine[] = {stream_id_};
+  auto decoded = loom::proto::decode_with_streams(datagram, mine);
   if (!decoded) {
-    return;  // malformed → silent drop (§6.6)
+    return;  // malformed / un-negotiated stream → silent drop (§6.6)
   }
   const auto& h = decoded.value().header;
-  if (h.stream_id != 0) {
-    return;  // video only for now (audio is M5)
+  if (h.stream_id != stream_id_) {
+    return;  // another stream's datagram (or audio) — not ours
   }
   counters_.datagrams += 1;
   counters_.bytes += datagram.size();

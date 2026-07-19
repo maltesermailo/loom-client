@@ -42,8 +42,19 @@ std::optional<std::int64_t> find_pair_elem(const Value::Map& m, std::int64_t key
   return std::nullopt;
 }
 
+// The Array value at integer `key`, or nullptr (e.g. CONFIG key 6 = streams).
+const Value::Array* find_array(const Value::Map& m, std::int64_t key) {
+  for (const auto& [k, v] : m) {
+    if (k.type() == Value::Type::Int && k.as_int() == key && v.type() == Value::Type::Array) {
+      return &v.as_array();
+    }
+  }
+  return nullptr;
+}
+
 // Parse a CONFIG (0x03) body into a SessionConfig (§3.4). Missing keys default
-// to 0, matching the ignore-unknown / best-effort decode elsewhere.
+// to 0, matching the ignore-unknown / best-effort decode elsewhere. Key 6 lists
+// the additional video streams (multi-display); absent ⇒ single-stream.
 SessionConfig parse_config(const Value::Map& body) {
   SessionConfig c;
   c.generation = static_cast<std::uint64_t>(find_int(body, 0).value_or(0));
@@ -53,6 +64,20 @@ SessionConfig parse_config(const Value::Map& body) {
   c.refresh = static_cast<std::uint64_t>(find_int(body, 3).value_or(0));
   c.audio = static_cast<std::uint64_t>(find_int(body, 4).value_or(0));
   c.bitrate_kbps = static_cast<std::uint64_t>(find_int(body, 5).value_or(0));
+
+  if (const auto* streams = find_array(body, 6)) {
+    for (const auto& s : *streams) {
+      if (s.type() != Value::Type::Map) continue;  // ignore malformed descriptors
+      const auto& desc = s.as_map();
+      StreamConfig sc;
+      sc.stream_id = static_cast<std::uint16_t>(find_int(desc, 0).value_or(0));
+      sc.width = static_cast<std::uint64_t>(find_pair_elem(desc, 1, 0).value_or(0));
+      sc.height = static_cast<std::uint64_t>(find_pair_elem(desc, 1, 1).value_or(0));
+      sc.refresh = static_cast<std::uint64_t>(find_int(desc, 2).value_or(0));
+      sc.bitrate_kbps = static_cast<std::uint64_t>(find_int(desc, 3).value_or(0));
+      c.extra_streams.push_back(sc);
+    }
+  }
   return c;
 }
 
@@ -242,6 +267,9 @@ void Session::handle_frame(std::span<const std::uint8_t> frame, std::int64_t now
         return;
       }
       host_name_ = find_text(body, 1);
+      // Key 3 (optional): the features the host activated this session (§3.4).
+      // Absent ⇒ 0 (no optional features). The app tests kFeatureMultiDisplay.
+      active_features_ = static_cast<std::uint64_t>(find_int(body, 3).value_or(0));
       push({Action::Kind::Established, {}, 0});
       step_ = Step::Config;
       return;
