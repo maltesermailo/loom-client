@@ -18,6 +18,7 @@
 #include <openxr/openxr_platform.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -42,6 +43,35 @@ struct EyeSwapchain {
   GLuint depth_buffer = 0;
   uint32_t width = 0;
   uint32_t height = 0;
+};
+
+// One streamed desktop: a cylinder layer with its own swapchain, the decode path
+// feeding it, and where it sits in space. The primary display is window 0; each
+// extra display (§3.4 multi-display) is another window, placed side-by-side.
+// Non-movable (owns a SurfaceTexture + HevcDecoder), so held via unique_ptr.
+struct DesktopWindow {
+  std::uint16_t stream_id = 0;
+
+  // Cylinder layer swapchain, sized to this stream, with its own mip chain.
+  XrSwapchain swapchain = XR_NULL_HANDLE;
+  std::vector<XrSwapchainImageOpenGLESKHR> images;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t mip_count = 1;
+  bool painted = false;  // static test image painted at least once
+
+  // Placement: yaw (radians) about the user, so windows fan out side-by-side.
+  float yaw = 0.0f;
+
+  // Decode path: the codec renders into the SurfaceTexture, whose OES texture the
+  // render thread blits into the cylinder swapchain.
+  SurfaceTexture surface;
+  HevcDecoder decoder;
+  bool decoder_active = false;
+
+  // Newest e2e latency (capture→display, µs) for this stream (§4.5).
+  std::uint64_t e2e_us = 0;
+  bool have_e2e = false;
 };
 
 class XrApp {
@@ -86,7 +116,7 @@ class XrApp {
   bool create_instance(android_app* app);
   bool create_session();
   bool create_swapchains();
-  bool create_cylinder_swapchain();
+  bool create_cylinder_swapchain(DesktopWindow& window, uint32_t width, uint32_t height);
   void request_refresh_rate(float hz);
   void handle_session_state(XrSessionState state, bool* exit_requested);
   void render_eye(const XrView& view, EyeSwapchain& eye);
@@ -97,11 +127,12 @@ class XrApp {
   // Brings up the decoder against the live receiver once streaming begins.
   void start_decoder();
 
-  // Blits the current cylinder source into the layer's next swapchain image. The
+  // Blits the current cylinder source into a window's next swapchain image. The
   // static-image path paints once; the video path repaints only on a new frame.
-  void paint_cylinder_test_image();
-  void paint_cylinder_from_decoder(const float transform[16]);
-  void blit_into_cylinder(GLuint program, GLenum target, GLuint texture, const float* transform);
+  void paint_cylinder_test_image(DesktopWindow& window);
+  void paint_cylinder_from_decoder(DesktopWindow& window, const float transform[16]);
+  void blit_into_cylinder(DesktopWindow& window, GLuint program, GLenum target, GLuint texture,
+                          const float* transform);
 
   EglContext egl_;
 
@@ -119,15 +150,13 @@ class XrApp {
   std::vector<XrViewConfigurationView> view_configs_;
   std::vector<EyeSwapchain> eyes_;
 
-  XrSwapchain cylinder_swapchain_ = XR_NULL_HANDLE;
-  std::vector<XrSwapchainImageOpenGLESKHR> cylinder_images_;
-  uint32_t cylinder_width_ = 0;
-  uint32_t cylinder_height_ = 0;
-  // Mip levels on the cylinder swapchain (1 if the runtime rejected a chain);
-  // regenerated per blit so the compositor can trilinear-filter the minified
-  // desktop instead of aliasing the base level into edge shimmer.
-  uint32_t cylinder_mip_count_ = 1;
-  bool cylinder_painted_ = false;
+  // One cylinder per streamed display (window 0 = primary). Built at create()
+  // with just the primary (showing the test image); the extra displays are added
+  // in start_decoder() once CONFIG (key 6) is known. Mip chains are regenerated
+  // per blit so the compositor trilinear-filters the minified desktop instead of
+  // aliasing the base level into edge shimmer.
+  std::vector<std::unique_ptr<DesktopWindow>> windows_;
+  JavaVM* vm_ = nullptr;  // for SurfaceTexture creation on extra windows
 
   // Whether the runtime advertised XR_FB_composition_layer_settings; gates the
   // cylinder layer's settings chain (§6.2), which carries both quality
@@ -143,20 +172,10 @@ class XrApp {
   GLuint oes_blit_program_ = 0;  // samples the decoder's OES external texture
   GLuint blit_vao_ = 0;
 
-  // Video path. Until streaming begins (or if no host is configured) the cylinder
-  // shows the static test image; then the decoder feeds it from the live stream.
-  bool decoder_active_ = false;
-  SurfaceTexture surface_texture_;
-  HevcDecoder decoder_;
-
   // The transport + session pump. optional because it is non-movable and built
   // in create() once HELLO params are known. Absent when no host is configured.
   std::optional<NetSession> net_session_;
   std::int64_t last_stats_us_ = 0;
-
-  // Newest e2e latency (capture→display, µs) for the overlay / STATS (§4.5).
-  std::uint64_t e2e_us_ = 0;
-  bool have_e2e_ = false;
 
   // Debug overlay + the bitrate estimate it shows (bytes over a 1 s window).
   Overlay overlay_;

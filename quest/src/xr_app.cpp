@@ -215,7 +215,15 @@ XrApp::~XrApp() {
     if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
   }
 
-  if (cylinder_swapchain_ != XR_NULL_HANDLE) xrDestroySwapchain(cylinder_swapchain_);
+  // Stop the decode threads and destroy the cylinder swapchains before
+  // net_session_ (whose receivers the decoders reference) is torn down at member
+  // destruction, which happens after this body runs.
+  for (auto& w : windows_) {
+    if (w->decoder_active) w->decoder.stop();
+    if (w->swapchain != XR_NULL_HANDLE) xrDestroySwapchain(w->swapchain);
+  }
+  windows_.clear();
+
   if (local_space_ != XR_NULL_HANDLE) xrDestroySpace(local_space_);
   if (session_ != XR_NULL_HANDLE) xrDestroySession(session_);
   if (instance_ != XR_NULL_HANDLE) xrDestroyInstance(instance_);
@@ -244,7 +252,19 @@ bool XrApp::create(android_app* app) {
   if (!create_instance(app)) return false;
   if (!create_session()) return false;
   if (!create_swapchains()) return false;
-  if (!create_cylinder_swapchain()) return false;
+
+  vm_ = app->activity->vm;
+  // The primary window (stream 0) exists from startup and shows the test image
+  // until streaming begins; extra displays (multi-display) are added in
+  // start_decoder() once CONFIG key 6 is known. The SurfaceTexture must be created
+  // on the render thread with GL current (here); the decoder attaches later.
+  auto primary = std::make_unique<DesktopWindow>();
+  primary->stream_id = 0;
+  if (!create_cylinder_swapchain(*primary, kCylinderWidth, kCylinderHeight)) return false;
+  if (!primary->surface.create(vm_)) {
+    LOOM_LOGE("SurfaceTexture setup failed — video unavailable");
+  }
+  windows_.push_back(std::move(primary));
 
   if (!grid_.create()) return false;
   test_texture_ = create_test_texture(kCylinderWidth, kCylinderHeight);
@@ -252,12 +272,6 @@ bool XrApp::create(android_app* app) {
   oes_blit_program_ = build_program(kBlitVertexShader, kOesBlitFragmentShader);
   if (blit_program_ == 0 || oes_blit_program_ == 0) return false;
   glGenVertexArrays(1, &blit_vao_);
-
-  // The SurfaceTexture must be created on the render thread with GL current
-  // (here); the decoder attaches to its window later, when streaming begins.
-  if (!surface_texture_.create(app->activity->vm)) {
-    LOOM_LOGE("SurfaceTexture setup failed — video unavailable");
-  }
 
   overlay_.create(session_);
 
@@ -293,6 +307,9 @@ void XrApp::connect_from_config(android_app* app) {
 
   loom::core::HelloParams params;
   params.client_name = "loom-quest";
+  // Advertise multi-display fan-in (§3.4): the host then streams one video per
+  // display and we render one cylinder each.
+  params.features |= loom::core::kFeatureMultiDisplay;
   net_session_.emplace(params);
   if (!net_session_->start(host, port)) {
     LOOM_LOGE("failed to start QUIC connection to %s:%u", host.c_str(), port);
@@ -303,13 +320,48 @@ void XrApp::connect_from_config(android_app* app) {
 }
 
 void XrApp::start_decoder() {
-  if (!decoder_.create(surface_texture_.window(), static_cast<int>(cylinder_width_),
-                       static_cast<int>(cylinder_height_))) {
-    return;
+  if (!net_session_) return;
+
+  // Add a window per extra display (§3.4 CONFIG key 6): its own cylinder swapchain
+  // (sized to the stream's native resolution) + SurfaceTexture. The primary window
+  // already exists from create().
+  if (const auto& cfg = net_session_->config()) {
+    for (const auto& s : cfg->extra_streams) {
+      if (net_session_->receiver(s.stream_id) == nullptr) continue;  // not served
+      auto w = std::make_unique<DesktopWindow>();
+      w->stream_id = s.stream_id;
+      const uint32_t sw = s.width ? static_cast<uint32_t>(s.width) : kCylinderWidth;
+      const uint32_t sh = s.height ? static_cast<uint32_t>(s.height) : kCylinderHeight;
+      if (!create_cylinder_swapchain(*w, sw, sh)) continue;
+      if (!w->surface.create(vm_)) {
+        LOOM_LOGE("SurfaceTexture setup failed for stream %u", s.stream_id);
+        continue;
+      }
+      windows_.push_back(std::move(w));
+    }
   }
-  decoder_.start(&net_session_->receiver());
-  decoder_active_ = true;
-  LOOM_LOGI("decoder started (streaming)");
+
+  // Fan the windows out side-by-side: window k at yaw (k − (N−1)/2)·step about the
+  // user, so the primary sits centered with extras flanking it.
+  const float step = kCylinderCentralAngle * 1.05f;  // central angle + a small gap
+  const float mid = static_cast<float>(windows_.size() - 1) / 2.0f;
+  for (std::size_t k = 0; k < windows_.size(); ++k) {
+    windows_[k]->yaw = (static_cast<float>(k) - mid) * step;
+  }
+
+  // Bring up one decoder per window, each fed by its stream's receiver.
+  for (auto& w : windows_) {
+    auto* rx = net_session_->receiver(w->stream_id);
+    if (rx == nullptr) continue;
+    if (!w->decoder.create(w->surface.window(), static_cast<int>(w->width),
+                           static_cast<int>(w->height))) {
+      LOOM_LOGE("decoder create failed for stream %u", w->stream_id);
+      continue;
+    }
+    w->decoder.start(rx);
+    w->decoder_active = true;
+  }
+  LOOM_LOGI("decoders started: %zu window(s)", windows_.size());
 }
 
 void XrApp::pump_network() {
@@ -325,30 +377,42 @@ void XrApp::pump_network() {
     bitrate_base_bytes_ = 0;
   }
 
-  // STATS every second (§3.7). Frame/loss counts come from the receiver; decode
-  // and rtt/e2e from here. The bitrate estimate (bytes over the window) feeds the
-  // overlay only — it is not a §3.7 field.
-  if (decoder_active_ && now - last_stats_us_ >= 1'000'000) {
-    const auto c = net_session_->receiver().counters();
-
+  // STATS every second (§3.7): one report per streamed display (key 7). Frame/loss
+  // counts come from each stream's receiver, decode from its decoder, rtt/e2e from
+  // the shared clock. The bitrate estimate (primary-stream bytes over the window)
+  // feeds the overlay only — it is not a §3.7 field.
+  const bool any_active = std::any_of(windows_.begin(), windows_.end(),
+                                      [](const auto& w) { return w->decoder_active; });
+  if (any_active && now - last_stats_us_ >= 1'000'000) {
+    const auto& pc = net_session_->receiver().counters();  // primary, for bitrate
     const double secs = static_cast<double>(now - bitrate_base_us_) / 1e6;
     if (secs > 0.0) {
       bitrate_kbps_ = static_cast<std::uint64_t>(
-          static_cast<double>(c.bytes - bitrate_base_bytes_) * 8.0 / 1000.0 / secs);
+          static_cast<double>(pc.bytes - bitrate_base_bytes_) * 8.0 / 1000.0 / secs);
     }
-    bitrate_base_bytes_ = c.bytes;
+    bitrate_base_bytes_ = pc.bytes;
     bitrate_base_us_ = now;
 
-    loom::core::StatsInput in;
-    in.frames_received = c.frames_received;
-    in.frames_dropped = c.frames_dropped;
-    in.datagrams = c.datagrams;
-    in.decode_us = static_cast<std::uint64_t>(decoder_.metrics().latest_ms * 1000.0f);
+    std::uint64_t rtt_us = 0;
     if (const auto clk = net_session_->clock()) {
-      in.rtt_us = static_cast<std::uint64_t>(std::max<std::int64_t>(0, clk->rtt));
+      rtt_us = static_cast<std::uint64_t>(std::max<std::int64_t>(0, clk->rtt));
     }
-    if (have_e2e_) in.e2e_us = e2e_us_;
-    net_session_->send_stats(in);
+
+    for (auto& w : windows_) {
+      if (!w->decoder_active) continue;
+      auto* rx = net_session_->receiver(w->stream_id);
+      if (rx == nullptr) continue;
+      const auto c = rx->counters();
+      loom::core::StatsInput in;
+      in.stream_id = w->stream_id;
+      in.frames_received = c.frames_received;
+      in.frames_dropped = c.frames_dropped;
+      in.datagrams = c.datagrams;
+      in.decode_us = static_cast<std::uint64_t>(w->decoder.metrics().latest_ms * 1000.0f);
+      in.rtt_us = rtt_us;
+      if (w->have_e2e) in.e2e_us = w->e2e_us;
+      net_session_->send_stats(in);
+    }
     last_stats_us_ = now;
   }
 }
@@ -357,10 +421,13 @@ std::vector<std::string> XrApp::overlay_lines() {
   char buf[64];
   std::vector<std::string> lines;
 
+  // The overlay reports the primary window (window 0); per-window stats ride the
+  // §3.7 STATS the host logs per stream_id.
+  DesktopWindow* primary = windows_.empty() ? nullptr : windows_.front().get();
   const auto clk = net_session_ ? net_session_->clock() : std::nullopt;
-  if (clk && have_e2e_) {
+  if (clk && primary && primary->have_e2e) {
     std::snprintf(buf, sizeof buf, "e2e %llu ms  rtt %llu ms",
-                  static_cast<unsigned long long>(e2e_us_ / 1000),
+                  static_cast<unsigned long long>(primary->e2e_us / 1000),
                   static_cast<unsigned long long>(std::max<std::int64_t>(0, clk->rtt) / 1000));
   } else {
     std::snprintf(buf, sizeof buf, "e2e --  rtt --");
@@ -373,8 +440,9 @@ std::vector<std::string> XrApp::overlay_lines() {
     const std::uint64_t total = c.frames_received + c.frames_dropped;
     if (total > 0) loss_pct = 100.0 * static_cast<double>(c.frames_dropped) / total;
   }
-  std::snprintf(buf, sizeof buf, "decode %.1f ms  loss %.2f%%",
-                decoder_active_ ? decoder_.metrics().latest_ms : 0.0f, loss_pct);
+  std::snprintf(buf, sizeof buf, "decode %.1f ms  loss %.2f%%  %zu win",
+                (primary && primary->decoder_active) ? primary->decoder.metrics().latest_ms : 0.0f,
+                loss_pct, windows_.size());
   lines.emplace_back(buf);
 
   std::snprintf(buf, sizeof buf, "bitrate %llu kbps",
@@ -533,15 +601,15 @@ bool XrApp::create_swapchains() {
   return true;
 }
 
-bool XrApp::create_cylinder_swapchain() {
-  cylinder_width_ = kCylinderWidth;
-  cylinder_height_ = kCylinderHeight;
+bool XrApp::create_cylinder_swapchain(DesktopWindow& window, uint32_t width, uint32_t height) {
+  window.width = width;
+  window.height = height;
 
   // Full mip chain so the compositor can trilinear-filter the desktop, which it
-  // minifies heavily onto the cylinder (2560 source px across ~1000 display px);
+  // minifies heavily onto the cylinder (source px across ~1000 display px);
   // sampling only the base level aliases high-contrast edges into shimmer.
   uint32_t mip_count = 1;
-  for (uint32_t dim = std::max(cylinder_width_, cylinder_height_); dim > 1; dim >>= 1) {
+  for (uint32_t dim = std::max(width, height); dim > 1; dim >>= 1) {
     ++mip_count;
   }
 
@@ -549,32 +617,31 @@ bool XrApp::create_cylinder_swapchain() {
   info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
   info.format = GL_RGBA8;
   info.sampleCount = 1;
-  info.width = cylinder_width_;
-  info.height = cylinder_height_;
+  info.width = width;
+  info.height = height;
   info.faceCount = 1;
   info.arraySize = 1;
   info.mipCount = mip_count;
 
   // Not every runtime allocates mipmapped swapchains; fall back to a single level
   // rather than fail to bring the cylinder up at all.
-  if (XR_FAILED(xrCreateSwapchain(session_, &info, &cylinder_swapchain_))) {
+  if (XR_FAILED(xrCreateSwapchain(session_, &info, &window.swapchain))) {
     LOOM_LOGI("mipmapped cylinder swapchain rejected; falling back to mipCount 1");
     info.mipCount = mip_count = 1;
-    if (xr_failed(xrCreateSwapchain(session_, &info, &cylinder_swapchain_),
+    if (xr_failed(xrCreateSwapchain(session_, &info, &window.swapchain),
                   "xrCreateSwapchain(cylinder)")) {
       return false;
     }
   }
-  cylinder_mip_count_ = mip_count;
-  LOOM_LOGI("cylinder swapchain: %ux%u, %u mip level(s)", cylinder_width_, cylinder_height_,
-            cylinder_mip_count_);
+  window.mip_count = mip_count;
+  LOOM_LOGI("cylinder swapchain (stream %u): %ux%u, %u mip level(s)", window.stream_id, width,
+            height, mip_count);
 
   uint32_t image_count = 0;
-  xrEnumerateSwapchainImages(cylinder_swapchain_, 0, &image_count, nullptr);
-  cylinder_images_.resize(image_count, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
-  xrEnumerateSwapchainImages(
-      cylinder_swapchain_, image_count, &image_count,
-      reinterpret_cast<XrSwapchainImageBaseHeader*>(cylinder_images_.data()));
+  xrEnumerateSwapchainImages(window.swapchain, 0, &image_count, nullptr);
+  window.images.resize(image_count, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+  xrEnumerateSwapchainImages(window.swapchain, image_count, &image_count,
+                             reinterpret_cast<XrSwapchainImageBaseHeader*>(window.images.data()));
 
   return true;
 }
@@ -656,26 +723,26 @@ bool XrApp::poll_events(bool* exit_requested) {
   return true;
 }
 
-void XrApp::blit_into_cylinder(GLuint program, GLenum target, GLuint texture,
+void XrApp::blit_into_cylinder(DesktopWindow& window, GLuint program, GLenum target, GLuint texture,
                                const float* transform) {
   uint32_t index = 0;
   XrSwapchainImageAcquireInfo acquire_info = {XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-  if (xr_failed(xrAcquireSwapchainImage(cylinder_swapchain_, &acquire_info, &index),
+  if (xr_failed(xrAcquireSwapchainImage(window.swapchain, &acquire_info, &index),
                 "xrAcquireSwapchainImage(cylinder)")) {
     return;
   }
 
   XrSwapchainImageWaitInfo wait_info = {XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
   wait_info.timeout = XR_INFINITE_DURATION;
-  xrWaitSwapchainImage(cylinder_swapchain_, &wait_info);
+  xrWaitSwapchainImage(window.swapchain, &wait_info);
 
   GLuint framebuffer = 0;
   glGenFramebuffers(1, &framebuffer);
   glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         cylinder_images_[index].image, 0);
+                         window.images[index].image, 0);
 
-  glViewport(0, 0, static_cast<GLsizei>(cylinder_width_), static_cast<GLsizei>(cylinder_height_));
+  glViewport(0, 0, static_cast<GLsizei>(window.width), static_cast<GLsizei>(window.height));
   glDisable(GL_DEPTH_TEST);
   glUseProgram(program);
   glUniformMatrix4fv(glGetUniformLocation(program, "uTexTransform"), 1, GL_FALSE, transform);
@@ -691,8 +758,8 @@ void XrApp::blit_into_cylinder(GLuint program, GLenum target, GLuint texture,
 
   // Rebuild the mip chain from the base level we just rendered, so the compositor
   // has prefiltered levels to sample under minification.
-  if (cylinder_mip_count_ > 1) {
-    glBindTexture(GL_TEXTURE_2D, cylinder_images_[index].image);
+  if (window.mip_count > 1) {
+    glBindTexture(GL_TEXTURE_2D, window.images[index].image);
     glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
   }
@@ -700,16 +767,16 @@ void XrApp::blit_into_cylinder(GLuint program, GLenum target, GLuint texture,
   glDeleteFramebuffers(1, &framebuffer);
 
   XrSwapchainImageReleaseInfo release_info = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-  xrReleaseSwapchainImage(cylinder_swapchain_, &release_info);
+  xrReleaseSwapchainImage(window.swapchain, &release_info);
 }
 
-void XrApp::paint_cylinder_test_image() {
-  blit_into_cylinder(blit_program_, GL_TEXTURE_2D, test_texture_, kFlipY);
-  cylinder_painted_ = true;
+void XrApp::paint_cylinder_test_image(DesktopWindow& window) {
+  blit_into_cylinder(window, blit_program_, GL_TEXTURE_2D, test_texture_, kFlipY);
+  window.painted = true;
 }
 
-void XrApp::paint_cylinder_from_decoder(const float transform[16]) {
-  blit_into_cylinder(oes_blit_program_, GL_TEXTURE_EXTERNAL_OES, surface_texture_.texture(),
+void XrApp::paint_cylinder_from_decoder(DesktopWindow& window, const float transform[16]) {
+  blit_into_cylinder(window, oes_blit_program_, GL_TEXTURE_EXTERNAL_OES, window.surface.texture(),
                      transform);
 }
 
@@ -767,10 +834,13 @@ void XrApp::render_frame() {
 
   std::vector<XrCompositionLayerProjectionView> projection_views(view_count);
   XrCompositionLayerProjection projection_layer = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-  XrCompositionLayerCylinderKHR cylinder_layer = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
-  // Chained onto cylinder_layer.next below; declared here so it outlives the
-  // render block and stays alive for the xrEndFrame read at function end.
-  XrCompositionLayerSettingsFB cylinder_settings = {XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+  // One cylinder (+ settings chain) per window. Declared here — sized to the
+  // current window count — so they outlive the render block and stay alive for the
+  // xrEndFrame read at function end.
+  std::vector<XrCompositionLayerCylinderKHR> cylinder_layers(
+      windows_.size(), {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR});
+  std::vector<XrCompositionLayerSettingsFB> cylinder_settings(
+      windows_.size(), {XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB});
   XrCompositionLayerQuad overlay_layer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
   std::vector<const XrCompositionLayerBaseHeader*> layers;
 
@@ -779,23 +849,26 @@ void XrApp::render_frame() {
     // decoder has produced a new frame; otherwise the compositor keeps
     // resampling the last image, so head motion stays smooth through a stall.
     // The static fallback (no decoder) is painted once.
-    if (decoder_active_) {
-      float transform[16];
-      std::int64_t ts_ns = 0;
-      if (surface_texture_.update(transform, &ts_ns)) {
-        paint_cylinder_from_decoder(transform);
+    const auto clk = net_session_ ? net_session_->clock() : std::nullopt;
+    for (auto& w : windows_) {
+      if (w->decoder_active) {
+        float transform[16];
+        std::int64_t ts_ns = 0;
+        if (w->surface.update(transform, &ts_ns)) {
+          paint_cylinder_from_decoder(*w, transform);
 
-        // The frame timestamp is the host capture_ts (µs) the decoder passed
-        // through, ×1000. e2e = now − (capture_ts − offset) (§4.5, §7).
-        if (const auto clk = net_session_ ? net_session_->clock() : std::nullopt) {
-          const std::int64_t capture_ts = ts_ns / 1000;
-          const std::int64_t e2e = now_us() - (capture_ts - clk->offset);
-          e2e_us_ = static_cast<std::uint64_t>(std::max<std::int64_t>(0, e2e));
-          have_e2e_ = true;
+          // The frame timestamp is the host capture_ts (µs) the decoder passed
+          // through, ×1000. e2e = now − (capture_ts − offset) (§4.5, §7).
+          if (clk) {
+            const std::int64_t capture_ts = ts_ns / 1000;
+            const std::int64_t e2e = now_us() - (capture_ts - clk->offset);
+            w->e2e_us = static_cast<std::uint64_t>(std::max<std::int64_t>(0, e2e));
+            w->have_e2e = true;
+          }
         }
+      } else if (!w->painted) {
+        paint_cylinder_test_image(*w);
       }
-    } else if (!cylinder_painted_) {
-      paint_cylinder_test_image();
     }
 
     for (uint32_t i = 0; i < view_count; ++i) {
@@ -816,32 +889,42 @@ void XrApp::render_frame() {
     projection_layer.views = projection_views.data();
     layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection_layer));
 
-    cylinder_layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-    cylinder_layer.space = local_space_;
-    cylinder_layer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-    cylinder_layer.subImage.swapchain = cylinder_swapchain_;
-    cylinder_layer.subImage.imageRect.offset = {0, 0};
-    cylinder_layer.subImage.imageRect.extent = {static_cast<int32_t>(cylinder_width_),
-                                                static_cast<int32_t>(cylinder_height_)};
-    cylinder_layer.subImage.imageArrayIndex = 0;
-    cylinder_layer.pose.orientation.w = 1.0f;
-    cylinder_layer.radius = kCylinderRadius;
-    cylinder_layer.centralAngle = kCylinderCentralAngle;
-    cylinder_layer.aspectRatio = kCylinderAspect;
+    // One cylinder layer per window, yawed about the user so they sit
+    // side-by-side (§6.2 layer settings per layer). Super-sampling anti-aliases
+    // the desktop, which the compositor minifies onto the cylinder; without it,
+    // high-contrast edges alias and shimmer under head motion. Sharpening rides
+    // the volume-down A/B toggle.
+    for (std::size_t k = 0; k < windows_.size(); ++k) {
+      const DesktopWindow& w = *windows_[k];
+      XrCompositionLayerCylinderKHR& cyl = cylinder_layers[k];
+      cyl.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+      cyl.space = local_space_;
+      cyl.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+      cyl.subImage.swapchain = w.swapchain;
+      cyl.subImage.imageRect.offset = {0, 0};
+      cyl.subImage.imageRect.extent = {static_cast<int32_t>(w.width),
+                                       static_cast<int32_t>(w.height)};
+      cyl.subImage.imageArrayIndex = 0;
+      cyl.pose.orientation.x = 0.0f;
+      cyl.pose.orientation.y = std::sin(w.yaw * 0.5f);
+      cyl.pose.orientation.z = 0.0f;
+      cyl.pose.orientation.w = std::cos(w.yaw * 0.5f);
+      cyl.radius = kCylinderRadius;
+      cyl.centralAngle = kCylinderCentralAngle;
+      cyl.aspectRatio = kCylinderAspect;
 
-    // §6.2 layer settings. Super-sampling anti-aliases the desktop, which the
-    // compositor minifies ~3:1 onto the cylinder (2560 px source across ~55° of a
-    // ~110° FOV); without it, high-contrast edges alias and shimmer as the layer
-    // reprojects under head motion. Sharpening rides the volume-down A/B toggle.
-    if (layer_settings_supported_) {
-      cylinder_settings.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SUPER_SAMPLING_BIT_FB;
-      if (sharpening_on_) {
-        cylinder_settings.layerFlags |= XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+      if (layer_settings_supported_) {
+        cylinder_settings[k].layerFlags =
+            XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SUPER_SAMPLING_BIT_FB;
+        if (sharpening_on_) {
+          cylinder_settings[k].layerFlags |=
+              XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+        }
+        cyl.next = &cylinder_settings[k];
       }
-      cylinder_layer.next = &cylinder_settings;
-    }
 
-    layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder_layer));
+      layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cyl));
+    }
 
     // Debug overlay on top, refreshed every frame so its stats keep ticking even
     // when the video is frozen.

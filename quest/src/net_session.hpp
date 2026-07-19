@@ -13,8 +13,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "loom/core/session.hpp"
 #include "loom/core/video_receiver.hpp"
@@ -53,16 +56,40 @@ class NetSession {
   const std::optional<loom::core::SessionConfig>& config() const { return session_.config(); }
   std::optional<loom::proto::clocksync::Estimate> clock() const { return session_.clock(); }
 
-  loom::core::VideoReceiver& receiver() { return receiver_; }
+  // The primary stream's receiver (stream_id 0) — always present.
+  loom::core::VideoReceiver& receiver() { return *receivers_.front().second; }
+  // The receiver for `stream_id`, or nullptr if that stream isn't served.
+  loom::core::VideoReceiver* receiver(std::uint16_t stream_id) {
+    for (auto& [sid, r] : receivers_)
+      if (sid == stream_id) return r.get();
+    return nullptr;
+  }
+  // Every served stream_id, primary first — the app iterates this to fan out one
+  // decoder + one layer per stream (§3.4 multi-display).
+  std::vector<std::uint16_t> stream_ids() const {
+    std::vector<std::uint16_t> ids;
+    ids.reserve(receivers_.size());
+    for (const auto& [sid, r] : receivers_) ids.push_back(sid);
+    return ids;
+  }
 
   // Build and send a STATS report (§3.7). The app supplies the decode/frame
-  // counts it owns; rtt/e2e come from the clock.
+  // counts it owns; rtt/e2e come from the clock. `in.stream_id` scopes it.
   void send_stats(const loom::core::StatsInput& in);
 
  private:
+  // Append a receiver for `stream_id`, wiring its IDR callback to the transport.
+  void add_receiver(std::uint16_t stream_id);
+  // Create the extra-display receivers once CONFIG (key 6) has been parsed and
+  // multi-display is active. Idempotent; the primary receiver is built in the ctor.
+  void build_extra_receivers();
+
   QuicTransport transport_;
   loom::core::Session session_;
-  loom::core::VideoReceiver receiver_;
+  // One receiver per served video stream, primary (stream_id 0) at front. Held by
+  // pointer because VideoReceiver is non-movable (owns a mutex/cv).
+  std::vector<std::pair<std::uint16_t, std::unique_ptr<loom::core::VideoReceiver>>> receivers_;
+  bool extra_receivers_built_ = false;
 
   bool streaming_ = false;
   bool just_started_streaming_ = false;

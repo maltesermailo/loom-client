@@ -11,22 +11,43 @@ using loom::core::Action;
 using loom::core::Event;
 using loom::proto::cbor::Value;
 
-// IDR_REQUEST frame (§3.6): body {0: last_good_frame_seq}.
-std::vector<std::uint8_t> idr_request_frame(std::uint32_t last_good) {
+// IDR_REQUEST frame (§3.6): body {0: last_good_frame_seq, 1: stream_id}. Key 1 is
+// omitted for the primary so a single-stream request is byte-identical to before.
+std::vector<std::uint8_t> idr_request_frame(std::uint32_t last_good, std::uint16_t stream_id) {
   Value::Map body;
   body.emplace_back(Value::integer(0), Value::integer(static_cast<std::int64_t>(last_good)));
+  if (stream_id != 0) {
+    body.emplace_back(Value::integer(1), Value::integer(stream_id));
+  }
   return control::encode_frame(control::kIdrRequest, body);
 }
 
 }  // namespace
 
-NetSession::NetSession(loom::core::HelloParams params)
-    : session_(std::move(params)),
-      // Every IDR request the receiver raises goes straight out the control
-      // stream; send_control no-ops until the control stream is open.
-      receiver_([this](std::uint32_t last_good) {
-        transport_.send_control(idr_request_frame(last_good));
-      }) {}
+NetSession::NetSession(loom::core::HelloParams params) : session_(std::move(params)) {
+  // The primary stream (stream_id 0) always exists; extra displays are added once
+  // CONFIG key 6 arrives (build_extra_receivers). Each receiver's IDR requests go
+  // straight out the control stream, tagged with its stream_id (§3.6).
+  add_receiver(0);
+}
+
+void NetSession::add_receiver(std::uint16_t stream_id) {
+  receivers_.emplace_back(stream_id,
+                          std::make_unique<loom::core::VideoReceiver>(
+                              [this, stream_id](std::uint32_t last_good) {
+                                transport_.send_control(idr_request_frame(last_good, stream_id));
+                              },
+                              stream_id));
+}
+
+void NetSession::build_extra_receivers() {
+  if (extra_receivers_built_) return;
+  const auto& cfg = session_.config();
+  if (!cfg) return;  // no CONFIG yet
+  extra_receivers_built_ = true;
+  if ((session_.features() & loom::core::kFeatureMultiDisplay) == 0) return;  // single-stream
+  for (const auto& s : cfg->extra_streams) add_receiver(s.stream_id);
+}
 
 bool NetSession::start(const std::string& host, std::uint16_t port) {
   return transport_.start(host, port);
@@ -43,9 +64,13 @@ void NetSession::pump(std::int64_t now_us) {
         break;
       case TransportEvent::Kind::ControlBytes:
         session_.on_control_bytes(ev->bytes, now_us);
+        // Once CONFIG is parsed, stand up the extra-display receivers so they are
+        // ready before any of their datagrams arrive (§3.4).
+        build_extra_receivers();
         break;
       case TransportEvent::Kind::Datagram:
-        receiver_.feed_datagram(ev->bytes, now_us / 1000);
+        // Feed every receiver; each keeps only its own stream_id (M6.3 fan-in).
+        for (auto& [sid, r] : receivers_) r->feed_datagram(ev->bytes, now_us / 1000);
         break;
       case TransportEvent::Kind::Closed:
         if (ev->code != 0) {
